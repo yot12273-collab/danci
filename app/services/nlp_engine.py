@@ -130,7 +130,7 @@ def _spell_size() -> int:
 # 导致 docx 导入“有效=0”。提前告警，便于在云端日志中直接定位。
 _SPELL_LOADED = _spell_size() > 0
 if not _SPELL_LOADED:
-    logger.warning("pyspellchecker 英文词表加载为空，单词校验已降级（docx 导入“有效”可能受影响）")
+    logger.warning("pyspellchecker 英文词表加载为空，单词校验降级为放行全部单词（docx 导入“有效”不再归零）")
 
 
 def _is_known(word: str) -> bool:
@@ -306,10 +306,14 @@ def analyze(raw: str) -> dict:
             pos = picked[1] if picked else None
     elif picked and _is_known(picked[0]):
         base, pos = picked[0], picked[1]
-    elif not _SPELL_LOADED and picked is not None:
-        # 降级兜底：拼写词表缺失/损坏时，仅凭 lemminflect 的还原结果判定合法性，
-        # 避免把整份文档全部误判为非法（表现为“有效=0”）。乱码词 lemminflect 无法还原，仍会被拒绝。
-        base, pos = picked[0], picked[1]
+    elif not _SPELL_LOADED:
+        # 降级兜底：拼写词表缺失/损坏时，跳过拼写合法性判定，放行所有已通过
+        # isalpha 校验的单词，保证 docx 导入不会出现“有效=0”。原形优先取 lemminflect
+        # 的还原结果，无法还原时退化为单词本身。
+        if picked is not None:
+            base, pos = picked[0], picked[1]
+        else:
+            base, pos = word, None
     else:
         suggestion = _spell.correction(word)
         msg = f"未找到单词 “{word}”"
