@@ -13,6 +13,8 @@ from .config import settings
 from .database import init_db
 from .routers import history, import_docx, quiz, recite, tags, words
 from .schemas.common import AppError, ERR_INTERNAL, ERR_VALIDATION
+from .services.dictionary import dictionary
+from .services.nlp_engine import _SPELL_LOADED, _spell_size
 
 
 @asynccontextmanager
@@ -73,7 +75,18 @@ def index():
 
 @app.get("/api/health", include_in_schema=False)
 def health():
-    return {"code": 0, "message": "ok", "data": {"status": "ok"}}
+    """探活 + 部署/词库自检，返回关键运行状态供排障（version 用于确认线上是否为最新代码）。"""
+    return {
+        "code": 0,
+        "message": "ok",
+        "data": {
+            "status": "ok",
+            "version": settings.version,
+            "spell_size": _spell_size(),
+            "spell_loaded": _SPELL_LOADED,
+            "dict_available": dictionary.available,
+        },
+    }
 
 
 if __name__ == "__main__":
