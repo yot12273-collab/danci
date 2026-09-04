@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 
 from docx import Document
+from docx.oxml.ns import qn
 from sqlmodel import select
 
 from ..config import settings
@@ -73,17 +74,37 @@ def get_job(job_id: str) -> dict:
 
 
 def _extract_docx_text(file_bytes: bytes) -> list[str]:
-    """解析 docx，返回段落与表格单元格中的全部文本。"""
+    """解析 docx，返回正文段落、表格、文本框、页眉页脚中的全部文本。
+
+    python-docx 的 ``Document.paragraphs`` 只覆盖正文段落；若词汇表放在文本框
+    （w:txbxContent）或页眉页脚里，正文段落为空会导致“提取 0 词、有效 0”。
+    这里显式补齐这些来源，避免“提取为 0”的隐性失败。
+    """
     with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as f:
         f.write(file_bytes)
         tmp_path = f.name
     try:
         doc = Document(tmp_path)
         texts = [p.text for p in doc.paragraphs]
+
+        # 表格单元格
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
                     texts.append(cell.text)
+
+        # 文本框 / 形状（含 mc:AlternateContent 内的现代文本框）
+        for txbx in doc.element.body.iter(qn("w:txbxContent")):
+            for p in txbx.iter(qn("w:p")):
+                text = "".join(t.text or "" for t in p.iter(qn("w:t")))
+                if text:
+                    texts.append(text)
+
+        # 页眉 / 页脚
+        for section in doc.sections:
+            texts.extend(p.text for p in section.header.paragraphs)
+            texts.extend(p.text for p in section.footer.paragraphs)
+
         return texts
     finally:
         try:
@@ -103,6 +124,10 @@ def _process(job_id: str, file_bytes: bytes, filename: str) -> None:
             raw_words.update(extract_words(text))
         scanned = len(raw_words)
         _update(job_id, progress={"filename": filename, "scanned": scanned})
+        logger.warning(
+            "docx 导入 [%s]：提取 %d 个词，样例：%s",
+            job_id, scanned, ", ".join(sorted(raw_words)[:10]) or "（无）",
+        )
 
         # 2) 词法还原 + 收集主词性
         # 兜底策略：词法校验失败（词库缺失/损坏、词未收录、无法还原）时不丢弃该词，
@@ -118,10 +143,10 @@ def _process(job_id: str, file_bytes: bytes, filename: str) -> None:
                 fallback += 1
                 lemma_infos.setdefault(w, None)
         valid = len(lemma_infos)
-        if fallback:
-            logger.warning(
-                "docx 导入：%d 个词词法校验失败，已按原始词形兜底入库（避免“有效”归零）", fallback
-            )
+        logger.warning(
+            "docx 导入 [%s]：提取 %d → 有效 %d（兜底 %d）",
+            job_id, scanned, valid, fallback,
+        )
         _update(job_id, progress={
             "filename": filename, "scanned": scanned,
             "valid": valid, "skipped": skipped,
@@ -168,4 +193,5 @@ def _process(job_id: str, file_bytes: bytes, filename: str) -> None:
             "tag_name": tag_name, "tag_id": tag_id,
         })
     except Exception as exc:  # noqa: BLE001 —— 后台任务需兜底所有异常
+        logger.exception("docx 导入 [%s] 失败：%s", job_id, exc)
         _update(job_id, status="error", error=str(exc))
