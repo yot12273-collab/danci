@@ -28,14 +28,36 @@ function toast(msg, ok = true) {
   toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
 }
 
+// ---------- 登录态（token 存 localStorage，请求统一注入 Authorization） ----------
+const TOKEN_KEY = 'vocab_token';
+const USERNAME_KEY = 'vocab_username';
+
+function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
+function setToken(token) { localStorage.setItem(TOKEN_KEY, token); }
+function clearToken() { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USERNAME_KEY); }
+
+// 组装带鉴权的请求头；FormData 场景不设 Content-Type（由浏览器自动生成边界）
+function authHeaders(extra = {}) {
+  const h = { ...extra };
+  if (getToken()) h['Authorization'] = 'Bearer ' + getToken();
+  return h;
+}
+
 // ---------- 请求封装（统一响应信封 {code,message,data}） ----------
 async function api(path, options = {}) {
+  options.headers = authHeaders(options.headers);
   let res;
   try {
     res = await fetch(path, options);
   } catch (e) {
     // 网络层失败（服务未启动 / 断网等）
     throw new Error('无法连接服务器，请确认服务已启动');
+  }
+  // 登录态失效：清本地 token，回到登录门禁（覆盖层盖住应用，避免泄露已加载数据）
+  if (res.status === 401) {
+    clearToken();
+    showLogin();
+    throw new Error('请先登录');
   }
   let json;
   try {
@@ -53,6 +75,73 @@ async function api(path, options = {}) {
   }
   return json.data;
 }
+
+// ---------- 登录 / 登出 ----------
+function showLogin() {
+  // 关闭所有业务覆盖层，只留登录门禁；聚焦账号输入方便直接键入
+  ['tagDetailPanel', 'quizPanel', 'recitePanel'].forEach(hide);
+  $('loginError').classList.add('hidden');
+  $('userBox').classList.add('hidden');
+  show('loginPanel');
+  $('loginUsername').focus();
+}
+
+async function tryLogin() {
+  const username = $('loginUsername').value.trim();
+  const password = $('loginPassword').value;
+  if (!username || !password) {
+    const el = $('loginError');
+    el.textContent = '请输入账号和密码';
+    el.classList.remove('hidden');
+    return;
+  }
+  $('loginBtn').disabled = true;
+  hide('loginError');
+  try {
+    // 登录接口本身无需 token，且账号错误返回 401（code 40102），
+    // 用裸 fetch 以展示「账号或密码错误」而非被 api() 的 401 门禁逻辑吞掉
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const json = await res.json();
+    if (json.code !== 0) throw new Error(json.message || '登录失败');
+    setToken(json.data.token);
+    localStorage.setItem(USERNAME_KEY, json.data.username);
+    enterApp(json.data.username);
+  } catch (e) {
+    const el = $('loginError');
+    el.textContent = e.message;
+    el.classList.remove('hidden');
+  } finally {
+    $('loginBtn').disabled = false;
+  }
+}
+
+// 登录成功：隐藏门禁、显示账号并进入生词本
+function enterApp(username) {
+  hide('loginPanel');
+  $('userName').textContent = username;
+  $('userBox').classList.remove('hidden');
+  switchTab('words');
+}
+
+async function doLogout() {
+  try {
+    // 通知后端删除会话；即便失败也一律本地登出（幂等）
+    await api('/api/auth/logout', { method: 'POST' });
+  } catch (e) { /* 忽略：本地 token 照常清除 */ }
+  clearToken();
+  showLogin();
+  toast('已退出登录');
+}
+
+$('loginBtn').addEventListener('click', tryLogin);
+$('loginPassword').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') tryLogin();
+});
+$('logoutBtn').addEventListener('click', doLogout);
 
 // ---------- 状态 ----------
 let currentTagId = null;   // 生词本当前标签过滤（null=全部）
@@ -424,7 +513,7 @@ $('docxFile').addEventListener('change', async (e) => {
   show('importProgress');
   progress.innerHTML = '<div class="muted">上传并解析中…</div>';
   try {
-    const res = await fetch('/api/import/docx', { method: 'POST', body: form });
+    const res = await fetch('/api/import/docx', { method: 'POST', headers: authHeaders(), body: form });
     const json = await res.json();
     if (json.code !== 0) throw new Error(json.message);
     pollJob(json.data.job_id);
@@ -1051,4 +1140,15 @@ async function goNextChunk() {
 }
 
 // ---------- 启动 ----------
-switchTab('words');
+// 门禁：无 token 直接进登录；有 token 先校验 /api/auth/me（失效时 api() 自动清 token 并弹登录层）
+async function bootstrap() {
+  if (!getToken()) { showLogin(); return; }
+  try {
+    const user = await api('/api/auth/me');
+    enterApp(user.username);
+  } catch (e) {
+    // token 校验失败：api() 已清 token 并 showLogin；此处兜底网络错误等异常
+    if (getToken()) showLogin();
+  }
+}
+bootstrap();

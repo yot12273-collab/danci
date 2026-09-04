@@ -13,6 +13,7 @@ class SearchHistory(SQLModel, table=True):
     __tablename__ = "search_history"
 
     id: int | None = Field(default=None, primary_key=True)
+    user_id: int | None = Field(default=None, foreign_key="users.id", index=True, ondelete="CASCADE")
     query: str = Field(max_length=64, index=True)
     lemma: str | None = Field(default=None, max_length=64)
     searched_at: datetime = Field(default_factory=utcnow, index=True)

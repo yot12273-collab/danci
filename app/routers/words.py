@@ -2,19 +2,20 @@
 """单词相关接口。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from ..dependencies import CurrentUser, get_current_user
 from ..schemas.common import ok
 from ..schemas.word import WordCreate, WordSetTags
 from ..services import word_service
 
-router = APIRouter(prefix="/api/words", tags=["words"])
+router = APIRouter(prefix="/api/words", tags=["words"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/analyze")
-def analyze(word: str = Query("", max_length=100)):
-    """查词：NLP 分析 + 中文释义（并写入历史）。"""
-    return ok(word_service.analyze_word(word))
+def analyze(word: str = Query("", max_length=100), user: CurrentUser = Depends(get_current_user)):
+    """查词：NLP 分析 + 中文释义（并写入当前用户历史）。"""
+    return ok(word_service.analyze_word(word, user.id))
 
 
 @router.get("")

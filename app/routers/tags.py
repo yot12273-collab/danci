@@ -2,13 +2,14 @@
 """标签相关接口。"""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from ..dependencies import get_current_user
 from ..schemas.common import ok
 from ..schemas.tag import TagCreate, TagUpdate
 from ..services import tag_service
 
-router = APIRouter(prefix="/api/tags", tags=["tags"])
+router = APIRouter(prefix="/api/tags", tags=["tags"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("")

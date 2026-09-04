@@ -11,16 +11,18 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .database import init_db
-from .routers import history, import_docx, quiz, recite, tags, words
+from .routers import auth, history, import_docx, quiz, recite, tags, words
 from .schemas.common import AppError, ERR_INTERNAL, ERR_VALIDATION
+from .services import auth_service
 from .services.dictionary import dictionary
 from .services.nlp_engine import _SPELL_LOADED, _spell_size
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """启动时建表（幂等），退出时无需特殊清理。"""
+    """启动时建表并预置账号（均幂等），退出时无需特殊清理。"""
     init_db()
+    auth_service.seed_users()
     yield
 
 
@@ -60,6 +62,7 @@ async def generic_error_handler(_request: Request, exc: Exception):
 
 
 # ---------- 业务路由 ----------
+app.include_router(auth.router)
 app.include_router(words.router)
 app.include_router(tags.router)
 app.include_router(history.router)

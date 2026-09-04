@@ -33,7 +33,7 @@ def _tags_of(session, word_id: int) -> list[dict]:
     return [{"id": t.id, "name": t.name, "color": t.color} for t in rows]
 
 
-def _analyze(raw: str, record_history: bool) -> dict:
+def _analyze(raw: str, record_history: bool, user_id: int | None = None) -> dict:
     """查词核心：NLP 分析 + 中文释义补全，返回完整详情（供搜索与背诵复用）。
 
     record_history=False 时不写查询历史，供背诵轮播复用（避免污染历史记录）。
@@ -53,7 +53,7 @@ def _analyze(raw: str, record_history: bool) -> dict:
         is_saved = word is not None
         tags = _tags_of(session, word.id) if word else []
         if record_history:
-            record(session, raw, lemma)
+            record(session, raw, lemma, user_id)
 
     return {
         **nlp,
@@ -65,9 +65,9 @@ def _analyze(raw: str, record_history: bool) -> dict:
     }
 
 
-def analyze_word(raw: str) -> dict:
-    """查词入口：NLP 分析 + 中文释义，并写入查询历史。"""
-    return _analyze(raw, record_history=True)
+def analyze_word(raw: str, user_id: int) -> dict:
+    """查词入口：NLP 分析 + 中文释义，并写入当前用户的查询历史。"""
+    return _analyze(raw, record_history=True, user_id=user_id)
 
 
 def detail_for_word(raw: str) -> dict:

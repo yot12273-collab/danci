@@ -13,8 +13,17 @@
 </head>
 <body>
   <header class="app-header">
-    <h1>📚 词汇学习助手</h1>
-    <p>查原形 · 看变形 · 记形近词</p>
+    <div class="app-header-top">
+      <div class="app-header-title">
+        <h1>📚 词汇学习助手</h1>
+        <p>查原形 · 看变形 · 记形近词</p>
+      </div>
+      <!-- 登录后显示当前账号，可一键登出 -->
+      <div id="userBox" class="user-box hidden">
+        <span id="userName" class="user-name"></span>
+        <button id="logoutBtn" class="logout-btn" type="button">退出</button>
+      </div>
+    </div>
   </header>
 
   <!-- 搜索栏 -->
@@ -189,6 +198,19 @@
         <button id="recitePauseBtn" class="btn ghost">暂停</button>
         <button id="reciteBackListBtn" class="btn ghost">返回列表</button>
       </div>
+    </div>
+  </section>
+
+  <!-- 登录视图（全屏覆盖门禁，未登录时最先展示，锁定一屏禁滚动） -->
+  <section id="loginPanel" class="overlay-panel hidden">
+    <div class="login-box">
+      <div class="login-title">📚 词汇学习助手</div>
+      <div class="login-sub">登录后查看个人历史</div>
+      <input id="loginUsername" type="text" inputmode="numeric" placeholder="账号"
+             autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <input id="loginPassword" type="password" placeholder="密码" autocomplete="current-password">
+      <div id="loginError" class="login-error hidden"></div>
+      <button id="loginBtn" class="btn primary login-btn" type="button">登录</button>
     </div>
   </section>
 

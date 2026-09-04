@@ -2,13 +2,14 @@
 """背诵计划相关接口（按标签隔离 · 自由选份）。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from ..dependencies import get_current_user
 from ..schemas.common import ok
 from ..schemas.recite import RecitePlanCreate
 from ..services import recite_service
 
-router = APIRouter(prefix="/api/recite", tags=["recite"])
+router = APIRouter(prefix="/api/recite", tags=["recite"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/plan")

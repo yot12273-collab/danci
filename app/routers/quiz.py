@@ -2,13 +2,14 @@
 """闪卡抽查接口。"""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from ..dependencies import get_current_user
 from ..schemas.common import ok
 from ..schemas.quiz import QuizRequest
 from ..services import quiz_service
 
-router = APIRouter(prefix="/api/quiz", tags=["quiz"])
+router = APIRouter(prefix="/api/quiz", tags=["quiz"], dependencies=[Depends(get_current_user)])
 
 
 @router.post("")

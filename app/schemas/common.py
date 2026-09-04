@@ -15,6 +15,8 @@ ERR_UNSUPPORTED_TYPE = 41501  # 文件类型不支持
 ERR_VALIDATION = 42201        # 请求体校验失败
 ERR_INTERNAL = 50001          # 服务器内部错误
 ERR_DICT_UNAVAILABLE = 50301  # 词典不可用
+ERR_UNAUTHORIZED = 40101      # 未登录 / 登录态失效
+ERR_AUTH_FAILED = 40102       # 账号或密码错误
 
 
 class AppError(Exception):

@@ -83,10 +83,29 @@ def _migrate_recite_tables() -> None:
             )
 
 
+def _migrate_search_history_table() -> None:
+    """给已存在的 search_history 表补 user_id 列。
+
+    create_all 不会对旧库的既有表补列，而 data/app.db 是已存在库，故需
+    ALTER TABLE 就地补列。规则：表不存在则交由 create_all 建最新结构；表存在但
+    缺 user_id 列时补一列可空 INTEGER（旧历史归为无主数据，不被任何账号看到）。
+    """
+    insp = inspect(engine)
+    if "search_history" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("search_history")}
+    if "user_id" not in cols:
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "ALTER TABLE search_history ADD COLUMN user_id INTEGER"
+            )
+
+
 def init_db() -> None:
     """建表（幂等）。需先导入 models 以注册所有表模型。"""
     from . import models  # noqa: F401  确保模型已注册到 metadata
 
+    _migrate_search_history_table()
     _migrate_recite_tables()
     SQLModel.metadata.create_all(engine)
 

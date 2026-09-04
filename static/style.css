@@ -40,6 +40,15 @@ button { font-family: inherit; }
 }
 .app-header h1 { font-size: 20px; font-weight: 700; }
 .app-header p { font-size: 13px; opacity: .85; margin-top: 4px; }
+.app-header-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.app-header-title { flex: 1; min-width: 0; }
+.user-box { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding-top: 2px; }
+.user-name { font-size: 14px; font-weight: 700; }
+.logout-btn {
+  border: 1px solid rgba(255, 255, 255, .5); background: transparent; color: #fff;
+  font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+}
+.logout-btn:active { background: rgba(255, 255, 255, .15); }
 
 /* ---------- 搜索栏 ---------- */
 .search-bar {
@@ -332,6 +341,26 @@ button { font-family: inherit; }
   flex: 1; font-size: 16px; font-weight: 700;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+/* ---------- 登录门禁（全屏覆盖，居中卡片，锁定一屏禁滚动） ---------- */
+#loginPanel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.login-box {
+  width: min(320px, 86%);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.login-title { font-size: 24px; font-weight: 800; text-align: center; }
+.login-sub { font-size: 13px; color: var(--muted); text-align: center; margin-bottom: 8px; }
+.login-box input {
+  width: 100%; border: 1px solid var(--border); border-radius: 12px;
+  padding: 13px 14px; font-size: 16px; outline: none; background: #fff;
+}
+.login-error { font-size: 13px; color: var(--danger); text-align: center; min-height: 18px; }
+.login-btn { width: 100%; }
 
 /* ---------- 标签详情极简列表 ---------- */
 .tag-word-item {

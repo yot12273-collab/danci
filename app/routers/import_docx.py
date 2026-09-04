@@ -2,12 +2,13 @@
 """docx 批量导入接口。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile
 
+from ..dependencies import get_current_user
 from ..schemas.common import ok
 from ..services import docx_service
 
-router = APIRouter(prefix="/api/import", tags=["import"])
+router = APIRouter(prefix="/api/import", tags=["import"], dependencies=[Depends(get_current_user)])
 
 
 @router.post("/docx")
