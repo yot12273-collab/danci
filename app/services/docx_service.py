@@ -12,6 +12,7 @@ docx_service.py —— Word 文档导入服务
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -33,6 +34,8 @@ from ..schemas.common import (
 from ..utils.text import extract_words
 from . import nlp_engine
 from .dictionary import dictionary
+
+logger = logging.getLogger(__name__)
 
 # 内存任务表（本机单进程足够；如需多进程可替换为 Redis）
 _jobs: dict[str, dict] = {}
@@ -101,16 +104,24 @@ def _process(job_id: str, file_bytes: bytes, filename: str) -> None:
         scanned = len(raw_words)
         _update(job_id, progress={"filename": filename, "scanned": scanned})
 
-        # 2) 词法还原 + 收集主词性（非法词跳过）
+        # 2) 词法还原 + 收集主词性
+        # 兜底策略：词法校验失败（词库缺失/损坏、词未收录、无法还原）时不丢弃该词，
+        # 直接以原始词形入库，保证“有效”绝不因词库问题归零。
         lemma_infos: dict[str, str | None] = {}
         skipped = 0
+        fallback = 0
         for w in raw_words:
             try:
                 nlp = nlp_engine.analyze(w)
                 lemma_infos.setdefault(nlp["base"], nlp.get("pos_label"))
             except nlp_engine.InvalidWordError:
-                skipped += 1
+                fallback += 1
+                lemma_infos.setdefault(w, None)
         valid = len(lemma_infos)
+        if fallback:
+            logger.warning(
+                "docx 导入：%d 个词词法校验失败，已按原始词形兜底入库（避免“有效”归零）", fallback
+            )
         _update(job_id, progress={
             "filename": filename, "scanned": scanned,
             "valid": valid, "skipped": skipped,
