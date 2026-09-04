@@ -40,6 +40,10 @@ jobs:
           echo "应用未在预期时间内就绪" >&2
           exit 1
 
+      - name: 校验 NLP 词表与词法分析（docx 导入「有效=0」回归门禁）
+        run: |
+          python -c "from app.services import nlp_engine as n; assert n._spell_size() > 0, 'pyspellchecker 词表为空'; assert n.analyze('computer')['base'] == 'computer'; assert n.analyze('running')['base'] == 'run'; print('NLP 校验通过：词表', n._spell_size(), '条')"
+
   # 可选：CI 通过后，用 Deploy Hook 触发 Render 部署
   # deploy:
   #   needs: smoke-test

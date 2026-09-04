@@ -17,10 +17,13 @@ nlp_engine.py —— 英语单词词法分析引擎（NLP 核心）
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import lemminflect
 from spellchecker import SpellChecker
+
+logger = logging.getLogger(__name__)
 
 
 class InvalidWordError(ValueError):
@@ -113,6 +116,21 @@ try:
     _spell.correction("example")
 except Exception:
     pass
+
+
+def _spell_size() -> int:
+    """拼写检查词表条数；返回 0 表示内置词表（resources/en.json.gz）未成功加载。"""
+    try:
+        return len(_spell._word_frequency.dictionary)
+    except Exception:
+        return 0
+
+
+# 启动自检：词表为空说明 pyspellchecker 内置词典未随包加载，此时拼写校验会退化，
+# 导致 docx 导入“有效=0”。提前告警，便于在云端日志中直接定位。
+_SPELL_LOADED = _spell_size() > 0
+if not _SPELL_LOADED:
+    logger.warning("pyspellchecker 英文词表加载为空，单词校验已降级（docx 导入“有效”可能受影响）")
 
 
 def _is_known(word: str) -> bool:
@@ -287,6 +305,10 @@ def analyze(raw: str) -> dict:
             base = word
             pos = picked[1] if picked else None
     elif picked and _is_known(picked[0]):
+        base, pos = picked[0], picked[1]
+    elif not _SPELL_LOADED and picked is not None:
+        # 降级兜底：拼写词表缺失/损坏时，仅凭 lemminflect 的还原结果判定合法性，
+        # 避免把整份文档全部误判为非法（表现为“有效=0”）。乱码词 lemminflect 无法还原，仍会被拒绝。
         base, pos = picked[0], picked[1]
     else:
         suggestion = _spell.correction(word)
