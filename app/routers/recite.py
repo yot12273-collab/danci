@@ -51,6 +51,12 @@ def reset_plan(tag_id: int = Query(..., ge=1)):
 
 
 @router.get("/chunk")
-def get_chunk(tag_id: int = Query(..., ge=1), index: int = Query(..., ge=1)):
-    """获取指定标签第 index 份（1 起）的完整单词详情（批量预加载）。"""
-    return ok(recite_service.get_chunk(tag_id, index))
+def get_chunk(
+    tag_id: int = Query(..., ge=1),
+    index: int = Query(..., ge=1),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    seed: int = Query(0, ge=0),
+):
+    """获取指定标签第 index 份（1 起）的单词详情切片（分批拉取，默认 10 词一批）。"""
+    return ok(recite_service.get_chunk(tag_id, index, offset=offset, limit=limit, seed=seed))

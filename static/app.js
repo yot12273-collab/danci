@@ -821,13 +821,22 @@ document.querySelectorAll('.voice-btn').forEach((btn) => {
 // 分组结构由后端快照持久化（重启后同标签仍见同一套切片）；前端只读「任意份」，
 // 计时轮播仅在前端内存维护，绝不维护完成进度、绝不弹窗、绝不自动跳转。
 
+// 「小步快跑」分批拉取参数：单批固定 10 词（约 4s 返回），缓冲 ≤ 3 词时静默补拉
+const RECITE_BATCH_SIZE = 10;
+const RECITE_WATERMARK = 3;
+
 let currentPlanType = 'count';   // 当前选择的方案类型：count 按数量 / ratio 按比例
 let recitePlanData = null;       // 当前计划摘要（含 chunks 分组，来自 GET /api/recite/plan?tag_id=）
 let currentReciteTagId = null;   // 当前背诵所属标签 id
 let currentReciteTagName = '';   // 当前背诵所属标签名
-let reciteWords = [];            // 当前份的单词列表（完整详情，内存缓存）
-let reciteIndex = 0;             // 当前份内下标
+let reciteWords = [];            // 已加载的单词队列（完整详情，随批次静默增长）
+let reciteIndex = 0;             // 当前展示下标（队列内）
 let reciteChunkIndex = 1;        // 当前份序号（1 起）
+let reciteChunkTotal = 0;        // 本份实际总词数（后端返回，用于尾词判定与进度显示）
+let reciteFetchDone = false;     // 是否已拉完本份全部批次
+let reciteStarted = false;       // 首批是否已渲染并启动倒计时
+let isFetching = false;          // 拉取防抖锁（严禁并发请求）
+let reciteShuffleSeed = 0;       // 切片内打乱种子（0=不打乱；非 0 时后端按此确定性洗牌）
 let reciteIntervalSec = 5;       // 倒计时总秒数（来自计划 interval_seconds）
 let reciteRemain = 5;            // 剩余秒数
 let reciteTimer = null;          // setInterval 句柄
@@ -970,55 +979,79 @@ $('reciteExitBtn').addEventListener('click', () => {
 // 重新制定计划：退回参数配置界面（自动回显上次参数），由用户确认要改哪个参数后再智能保存
 $('reciteRebuildBtn').addEventListener('click', () => showReciteSetup());
 
-// Fisher-Yates 洗牌：返回新数组，不污染后端下发的固定顺序缓存
-function shuffleArray(arr) {
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-// 开始某一份背诵：拉取该份完整单词（一次请求批量预加载）并进入运行态
+// 开始某一份背诵：重置本份加载态，先拉首批 10 词进入运行态，后续批次按水位线静默补齐
 async function startReciteChunk(index) {
   hide('reciteSetup'); hide('reciteList');
   show('reciteRun');
   stopCountdown();
+  // 重置本份全部加载态，避免残留上一份的队列/锁/种子
+  reciteChunkIndex = index;
+  reciteWords = [];
+  reciteIndex = 0;
+  reciteChunkTotal = 0;
+  reciteFetchDone = false;
+  reciteStarted = false;
+  isFetching = false;
+  // 切片内打乱：每次进入本份生成新随机种子，后端据此确定性洗牌（同一次进入内各批顺序一致）
+  reciteShuffleSeed = (recitePlanData && recitePlanData.shuffle_chunk)
+    ? Math.floor(Math.random() * 2147483646) + 1
+    : 0;
   $('reciteProgress').textContent = '正在准备第 ' + index + ' 份…';
   $('reciteCountdown').textContent = '…';
   $('reciteBody').innerHTML = '<div class="muted" style="padding:40px 0;text-align:center;">正在加载本份单词，请稍候…</div>';
 
+  await fetchReciteBatch();
+}
+
+// 静默拉取下一批（固定 10 词）：isFetching 防抖锁保证绝不并发；新批次推入队列尾，
+// 不打断当前播放。首批到位后渲染第一张卡片并启动倒计时，后续批次仅静默入队。
+async function fetchReciteBatch() {
+  if (isFetching || reciteFetchDone) return;
+  isFetching = true;
+  const offset = reciteWords.length;   // 已加载词数即下一批的起始下标
   try {
-    // 一次性批量拉取本份全部单词的完整详情（仅此一次网络请求，之后轮播零请求）
-    const data = await api('/api/recite/chunk?tag_id=' + currentReciteTagId + '&index=' + index);
-    reciteWords = data.words || [];
-    reciteChunkIndex = data.chunk_index;
+    const data = await api(
+      '/api/recite/chunk?tag_id=' + currentReciteTagId + '&index=' + reciteChunkIndex +
+      '&offset=' + offset + '&limit=' + RECITE_BATCH_SIZE + '&seed=' + reciteShuffleSeed
+    );
+    reciteChunkTotal = data.chunk_total || 0;
     reciteIntervalSec = data.interval_seconds || 5;
-    if (!reciteWords.length) { toast('本份暂无单词', false); return; }
-    // 切片内打乱：开启时每次进入本份都重新洗牌；关闭时严格按快照固定顺序
-    if (recitePlanData && recitePlanData.shuffle_chunk) {
-      reciteWords = shuffleArray(reciteWords);
+    reciteWords = reciteWords.concat(data.words || []);
+    if (reciteChunkTotal > 0 && reciteWords.length >= reciteChunkTotal) reciteFetchDone = true;
+
+    // 首批到位：渲染第一张卡片并启动倒计时（仅在未启动过时执行一次）
+    if (!reciteStarted) {
+      reciteStarted = true;
+      if (!reciteWords.length) { toast('本份暂无单词', false); return; }
+      renderReciteCard();
+      startCountdown();
+      maybeFetchRecite();
     }
-    reciteIndex = 0;
-    renderReciteCard();
-    startCountdown();
   } catch (e) {
     toast(e.message, false);
     $('reciteBody').innerHTML = `<div class="muted" style="padding:40px 0;text-align:center;">${escapeHtml(e.message)}</div>`;
+  } finally {
+    isFetching = false;
   }
+}
+
+// 水位线触发：已加载但未展示的缓冲 ≤ 3 词时，静默补拉下一批，保证播放连贯。
+// 仅在有后续批次且无进行中请求时触发（isFetching 锁由 fetchReciteBatch 内部再次校验）。
+function maybeFetchRecite() {
+  if (reciteFetchDone || isFetching) return;
+  if (reciteWords.length - reciteIndex <= RECITE_WATERMARK) fetchReciteBatch();
 }
 
 // 渲染当前单词：从内存缓存 reciteWords 取出完整详情并复用「单词搜索」UI（零网络）
 function renderReciteCard() {
   const d = reciteWords[reciteIndex];
-  $('reciteProgress').textContent = `第 ${reciteChunkIndex} 份 · 本份 ${reciteIndex + 1} / ${reciteWords.length}`;
+  $('reciteProgress').textContent = `第 ${reciteChunkIndex} 份 · 本份 ${reciteIndex + 1} / ${reciteChunkTotal}`;
   $('reciteBody').innerHTML = buildWordDetailHtml(d, { readonly: true });
   syncAdvanceButton();      // 依据当前下标同步推进按钮文字（下一个 ↔ 进入下一份）
   resetCountdown();         // 复位倒计时数字显示
-  // 尾词强制暂停：到达本切片最后一个单词时立即清除定时器、停止自动跳转，
+  // 尾词（本份最后一个词，按总词数判定，与已加载进度无关）：立即清除定时器、停止自动跳转，
   // 界面无限期停留在尾词上，把进入下一份的控制权交还用户手动点击「进入下一份」按钮。
-  if (reciteIndex >= reciteWords.length - 1) {
+  if (reciteIndex >= reciteChunkTotal - 1) {
     stopCountdown();
   }
 }
@@ -1030,9 +1063,9 @@ function resetCountdown() {
 }
 function startCountdown() {
   // 尾词不启动自动轮播：最后一个单词由用户手动点击「进入下一份」接管，绝不自动跳转。
-  // 防御性守卫：startReciteChunk 在 renderReciteCard 之后无条件调用本函数，
+  // 防御性守卫：fetchReciteBatch 在 renderReciteCard 之后无条件调用本函数，
   // 单份仅 1 词时 renderReciteCard 已停止定时器，此处再次拦截以防被误重启。
-  if (reciteWords.length > 0 && reciteIndex >= reciteWords.length - 1) {
+  if (reciteChunkTotal > 0 && reciteIndex >= reciteChunkTotal - 1) {
     stopCountdown();
     return;
   }
@@ -1080,7 +1113,7 @@ $('reciteRun').addEventListener('dblclick', (e) => {
   // 避免与单击动作（暂停切换、返回、跳转）叠加造成误触。
   if (e.target.closest('button, a')) return;
   // 尾词不响应双击快进：进入下一份的唯一触发途径是手动点击「进入下一份」按钮。
-  if (reciteWords.length > 0 && reciteIndex >= reciteWords.length - 1) return;
+  if (reciteChunkTotal > 0 && reciteIndex >= reciteChunkTotal - 1) return;
   // 其余大面积空白处 → 快进到下一词。
   reciteNext();
 });
@@ -1096,7 +1129,7 @@ $('reciteBackListBtn').addEventListener('click', () => {
 // - 非尾词：开关开启显示「下一个」，关闭则彻底隐藏（改由双击空白区快进）。
 function syncAdvanceButton() {
   const btn = $('reciteNextBtn');
-  const isTail = reciteWords.length > 0 && reciteIndex >= reciteWords.length - 1;
+  const isTail = reciteChunkTotal > 0 && reciteIndex >= reciteChunkTotal - 1;
   if (isTail) {
     // 尾词态：强制显示，语义切换为「进入下一份」
     btn.textContent = '进入下一份';
@@ -1113,14 +1146,21 @@ function syncAdvanceButton() {
 // 非尾词 → 内存切到下一词；尾词 → 等同点击【进入下一份】触发循环序列。
 // 注意：尾词时定时器已被强制清除、双击也被拦截，因此尾词只能由「进入下一份」按钮触发本函数。
 function reciteNext() {
-  if (!reciteWords.length) return;   // 本份尚未加载完成时忽略推进（防止加载中双击/连点误触）
+  if (!reciteWords.length) return;   // 首批尚未加载完成时忽略推进（防止加载中双击/连点误触）
+  // 越界守卫：下一词尚未入队且本份未拉完 → 静默补拉并保持当前卡片（不推进、不重置计时）。
+  // 正常阅读速度下水位线已提前拉取，几乎不会走到；极端高频连点跳过时以此兜底，绝不越界取到 undefined。
+  if (reciteIndex + 1 >= reciteWords.length && !reciteFetchDone) {
+    fetchReciteBatch();
+    return;
+  }
   clearInterval(reciteTimer); reciteTimer = null;
-  if (reciteIndex >= reciteWords.length - 1) {
+  if (reciteIndex >= reciteChunkTotal - 1) {
     goNextChunk();              // 尾词 → 进入下一份（仅由手动点击「进入下一份」触发，无强制终点）
     return;
   }
   reciteIndex += 1;
   renderReciteCard();
+  maybeFetchRecite();           // 推进后检查水位线，必要时静默补拉下一批，保证连贯
   if (reciteRunning) startCountdown();
 }
 

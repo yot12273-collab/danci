@@ -354,12 +354,15 @@ def advance_sequence(tag_id: int) -> dict:
     }
 
 
-def get_chunk(tag_id: int, index: int) -> dict:
-    """取指定标签第 index 份（1 起）的完整单词详情，供前端一次性批量预加载。
+def get_chunk(tag_id: int, index: int, offset: int = 0, limit: int = 10, seed: int = 0) -> dict:
+    """取指定标签第 index 份（1 起）的单词详情切片，供前端「小步快跑」分批拉取。
 
-    任意份均可取（自由选份 / 反复重背），不存在「下一份」限制；
-    前端调用一次即拿到本份全部词的完整信息（释义/词形时态/形近词等），
-    轮播时无需再逐词请求后端。
+    为控制单次接口耗时（约 10 词 ≈ 4s），本接口按 offset/limit 只返回一批，
+    前端以「水位线（剩余缓冲 ≤ 3 词触发拉取）」方式静默补齐后续批次；batch_details
+    仅对切片内的词做完整分析（释义/词形/形近词），不再一次性处理整份。
+
+    seed != 0 时按该种子对「本份全部词序」做确定性洗牌后再切片——保证同一份、
+    同一种子下多批请求的先后顺序一致（切片内打乱跨批次不乱序、不重不漏）。
     """
     with session_scope() as session:
         plan = _get_active_plan(session, tag_id)
@@ -372,14 +375,14 @@ def get_chunk(tag_id: int, index: int) -> dict:
                 http_status=422,
             )
 
-        # 本份区间 [offset, offset + chunk_size)，按 seq 精确切片（无视删词产生的空洞）
-        offset = (index - 1) * plan.chunk_size
+        # 本份区间 [base, base + chunk_size)，按 seq 精确切片（无视删词产生的空洞）
+        base = (index - 1) * plan.chunk_size
         word_ids = session.exec(
             select(RecitePlanWord.word_id)
             .where(
                 RecitePlanWord.plan_id == plan.id,
-                RecitePlanWord.seq >= offset,
-                RecitePlanWord.seq < offset + plan.chunk_size,
+                RecitePlanWord.seq >= base,
+                RecitePlanWord.seq < base + plan.chunk_size,
             )
             .order_by(RecitePlanWord.seq)
         ).all()
@@ -395,14 +398,22 @@ def get_chunk(tag_id: int, index: int) -> dict:
 
         interval_seconds = plan.interval_seconds
         total_chunks = plan.total_chunks
+        chunk_total = len(lemmas)
 
-    # 批量生成完整搜索详情（独立会话，不写历史）
-    words = batch_details(lemmas) if lemmas else []
+    # 切片内打乱：以种子做确定性洗牌（同份同种子 → 顺序一致），再截取本批
+    if seed:
+        random.Random(seed).shuffle(lemmas)
+
+    batch = lemmas[offset : offset + limit]
+
+    # 批量生成完整搜索详情（独立会话，不写历史），仅处理本批
+    words = batch_details(batch) if batch else []
 
     return {
-        "chunk_index": index,              # 第几份（1 起）
-        "chunk_total": len(words),         # 本份实际词数（可能因删词略少于 chunk_size）
+        "chunk_index": index,          # 第几份（1 起）
+        "chunk_total": chunk_total,    # 本份实际总词数（删词后可能略少于 chunk_size）
+        "offset": offset,              # 本批起始下标（0 起，供前端续拉/排错）
+        "words": words,                # 本批完整详情列表（与搜索结构一致），顺序已固定
         "total_chunks": total_chunks,
         "interval_seconds": interval_seconds,
-        "words": words,                    # 完整详情列表（与搜索结构一致），顺序已固定
     }
