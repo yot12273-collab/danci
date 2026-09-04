@@ -85,6 +85,13 @@ def _extract_docx_text(file_bytes: bytes) -> list[str]:
         tmp_path = f.name
     try:
         doc = Document(tmp_path)
+        # 结构自检：定位“提取 0”时，内容到底是图片、空文档还是未覆盖的特殊文本。
+        body_text_len = sum(len(t.text or "") for t in doc.element.body.iter(qn("w:t")))
+        logger.warning(
+            "docx 解析：%d 字节，正文段落 %d，表格 %d，内联图片 %d，正文字符 %d",
+            len(file_bytes), len(doc.paragraphs), len(doc.tables),
+            len(doc.inline_shapes), body_text_len,
+        )
         texts = [p.text for p in doc.paragraphs]
 
         # 表格单元格
