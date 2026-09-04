@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <!-- 移动端优先：禁用缩放、适配刘海屏 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="词汇学习">
+  <meta name="theme-color" content="#2563eb">
+  <title>英语词汇学习助手</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>📚 词汇学习助手</h1>
+    <p>查原形 · 看变形 · 记形近词</p>
+  </header>
+
+  <!-- 搜索栏 -->
+  <div class="search-bar">
+    <input id="searchInput" type="text" placeholder="输入英文单词查询…"
+           autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button id="searchBtn">查询</button>
+  </div>
+  <div id="searchError" class="search-error hidden"></div>
+
+  <!-- 查词结果卡片 -->
+  <div id="searchResult" class="result-card hidden"></div>
+
+  <!-- 主内容区 -->
+  <main class="content">
+    <section id="tab-words" class="tab-panel">
+      <div id="tagChips" class="tag-chips"></div>
+      <ul id="wordList" class="word-list"></ul>
+      <div id="wordEmpty" class="empty">生词本为空<br>搜索单词后点击「加入生词本」即可收藏</div>
+    </section>
+
+    <section id="tab-history" class="tab-panel hidden">
+      <div class="panel-head">
+        <span>查询历史</span>
+        <button id="clearHistory" class="link-btn danger">清空全部</button>
+      </div>
+      <ul id="historyList" class="history-list"></ul>
+      <div id="historyEmpty" class="empty">暂无历史记录</div>
+    </section>
+
+    <section id="tab-tags" class="tab-panel hidden">
+      <div class="panel-head"><span>标签管理</span></div>
+      <form id="tagForm" class="tag-form">
+        <input id="tagName" type="text" placeholder="新标签名" maxlength="64">
+        <button type="submit">添加</button>
+      </form>
+      <ul id="tagList" class="tag-list"></ul>
+    </section>
+
+    <section id="tab-import" class="tab-panel hidden">
+      <div class="panel-head"><span>导入生词（.docx）</span></div>
+      <p class="hint">上传 Word 文档，自动提取其中的英文单词，按文件名创建标签并批量加入生词本。</p>
+      <label class="upload-btn">
+        <input id="docxFile" type="file" accept=".docx" hidden>
+        <span id="uploadLabel">选择 .docx 文件</span>
+      </label>
+      <div id="importProgress" class="import-progress hidden"></div>
+    </section>
+  </main>
+
+  <!-- 底部导航 -->
+  <nav class="tab-bar">
+    <button class="tab-btn active" data-tab="words">生词本</button>
+    <button class="tab-btn" data-tab="history">历史</button>
+    <button class="tab-btn" data-tab="tags">标签</button>
+    <button class="tab-btn" data-tab="import">导入</button>
+  </nav>
+
+  <!-- 详情抽屉（底部弹出） -->
+  <div id="drawerMask" class="drawer-mask hidden"></div>
+  <div id="drawer" class="drawer">
+    <div class="drawer-handle"></div>
+    <div id="drawerContent"></div>
+  </div>
+
+  <!-- 标签详情视图（全屏覆盖） -->
+  <section id="tagDetailPanel" class="overlay-panel hidden">
+    <div class="sub-head">
+      <button class="back-btn" data-back="tags">‹ 返回</button>
+      <span id="tagDetailTitle" class="sub-title">标签详情</span>
+      <button id="startQuizBtn" class="btn ghost small">开始测试</button>
+      <button id="startReciteBtn" class="btn ghost small">背诵</button>
+    </div>
+    <ul id="tagWordList" class="word-list"></ul>
+    <div id="tagWordEmpty" class="empty">该标签下暂无单词</div>
+  </section>
+
+  <!-- 闪卡测试视图（全屏覆盖） -->
+  <section id="quizPanel" class="overlay-panel hidden">
+    <div class="sub-head">
+      <button class="back-btn" data-back="quiz">‹ 返回</button>
+      <span id="quizTitle" class="sub-title">闪卡测试</span>
+    </div>
+
+    <!-- 设置态 -->
+    <div id="quizSetup" class="quiz-setup">
+      <div class="setup-label">出题模式</div>
+      <div class="mode-row">
+        <button class="mode-btn active" data-mode="en2zh">英译中</button>
+        <button class="mode-btn" data-mode="zh2en">中译英</button>
+        <button class="mode-btn" data-mode="mix">混合</button>
+      </div>
+      <div class="setup-label">发音音色</div>
+      <div class="mode-row">
+        <button class="voice-btn active" data-voice="2">美音</button>
+        <button class="voice-btn" data-voice="1">英音</button>
+      </div>
+      <div class="setup-label">题目数量</div>
+      <input id="quizTarget" type="number" inputmode="numeric" min="1" max="2000" placeholder="留空 = 单词总数">
+      <button id="quizGoBtn" class="btn primary">开始抽查</button>
+    </div>
+
+    <!-- 答题态 -->
+    <div id="quizRun" class="quiz-run hidden">
+      <div id="quizProgress" class="quiz-progress"></div>
+      <div id="quizCard" class="quiz-card"></div>
+      <div id="quizFeedback" class="quiz-feedback hidden"></div>
+    </div>
+
+    <!-- 完成态 -->
+    <div id="quizDone" class="quiz-done hidden">
+      <div class="done-icon">🎉</div>
+      <div id="quizDoneText" class="done-text">抽查完成！</div>
+      <button id="quizRestartBtn" class="btn primary">再来一轮</button>
+      <button id="quizBackBtn" class="btn ghost">返回标签</button>
+    </div>
+  </section>
+
+  <!-- 自动计时背诵视图（全屏覆盖，切片式自由选份） -->
+  <section id="recitePanel" class="overlay-panel hidden">
+    <div class="sub-head">
+      <button class="back-btn" data-back="recite">‹ 返回</button>
+      <span class="sub-title" id="reciteTitle">自动计时背诵</span>
+    </div>
+
+    <!-- 制定态：无计划 -->
+    <div id="reciteSetup" class="quiz-setup">
+      <div class="setup-label">方案类型</div>
+      <div class="mode-row">
+        <button class="mode-btn active" data-plan="count">按数量</button>
+        <button class="mode-btn" data-plan="ratio">按比例</button>
+      </div>
+      <div class="setup-label" id="reciteParamLabel">单次背诵数量（单词数）</div>
+      <input id="reciteParam" type="number" inputmode="decimal" min="1" placeholder="例如 100">
+      <div class="setup-label">轮播间隔（秒）</div>
+      <input id="reciteInterval" type="number" inputmode="numeric" min="1" max="600" value="5">
+      <div class="setup-label">切片内打乱</div>
+      <label class="switch-row">
+        <input id="reciteShuffle" type="checkbox">
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+        <span class="switch-text">每次背诵该份时随机打乱单词顺序</span>
+      </label>
+      <div class="setup-label">背诵期间显示「下一个」按钮</div>
+      <label class="switch-row">
+        <input id="reciteShowNext" type="checkbox" checked>
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+        <span class="switch-text">关闭后常规态隐藏按钮，仅尾词强制显示「进入下一份」</span>
+      </label>
+      <div class="setup-label">背诵序列</div>
+      <input id="reciteSequence" type="text" inputmode="numeric"
+             placeholder="留空 = 按 1 2 3 … 顺序（空格分隔，如 1 2 1 2 3 无限循环）">
+      <button id="reciteCreateBtn" class="btn primary">创建背诵计划</button>
+    </div>
+
+    <!-- 列表态：分组按钮 + 底部常驻控制 -->
+    <div id="reciteList" class="hidden">
+      <div class="recite-summary" id="reciteSummary"></div>
+      <ul id="reciteChunkList" class="chunk-list"></ul>
+      <div class="recite-footer">
+        <button id="reciteExitBtn" class="btn ghost">结束本次背诵</button>
+        <button id="reciteRebuildBtn" class="btn ghost danger">重新制定计划</button>
+      </div>
+    </div>
+
+    <!-- 运行态：计时轮播（单键推进：下一个 ↔ 进入下一份，状态融合） -->
+    <div id="reciteRun" class="recite-run hidden">
+      <div class="recite-progress" id="reciteProgress"></div>
+      <div class="recite-countdown" id="reciteCountdown">5</div>
+      <div id="reciteBody" class="recite-body"></div>
+      <button id="reciteNextBtn" class="btn primary recite-advance">下一个</button>
+      <div class="recite-controls">
+        <button id="recitePauseBtn" class="btn ghost">暂停</button>
+        <button id="reciteBackListBtn" class="btn ghost">返回列表</button>
+      </div>
+    </div>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

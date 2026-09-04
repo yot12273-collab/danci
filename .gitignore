@@ -1,0 +1,20 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---------- SQLite 运行时数据（用户生词 + WAL 日志，绝不应入库） ----------
+# app.db 每次启动由 init_db() 自动重建；-wal/-shm 是 WAL 日志，提交会冲突且无意义
+data/app.db
+data/app.db-wal
+data/app.db-shm
+
+# ---------- 临时 / 自检 ----------
+tmp/
+
+# 注意：data/dict.sqlite（约 95MB）是本应用必需的中文词典，由 scripts/build_dict.py
+# 从 ECDICT StarDict 词典生成。这里【不】忽略它，让它随仓库提交，保证部署后开箱即用。
+# 代价：仓库体积偏大、接近 GitHub 单文件 100MB 上限；若想精简，可改为忽略它，
+# 并在部署构建阶段下载 ECDICT 后用 build_dict.py 重新生成。

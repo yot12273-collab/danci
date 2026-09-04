@@ -1,0 +1,14 @@
+# Render 蓝图：声明一个 Python Web 服务。
+# 连接 GitHub 仓库后，Render 会在每次 push 到 main 时自动构建并部署。
+# 说明：本应用是 FastAPI + SQLite 后端，GitHub Pages（纯静态托管）无法运行后端，
+#       因此部署目标必须是能跑 Python 的平台（此处为 render.com，默认免费 tier）。
+services:
+  - type: web
+    name: vocab-app
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.4"

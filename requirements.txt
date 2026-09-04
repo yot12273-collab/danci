@@ -1,0 +1,9 @@
+# 英语词汇学习助手 · 依赖清单
+# 安装：pip install -r requirements.txt
+fastapi>=0.110
+uvicorn[standard]>=0.29
+sqlmodel>=0.0.14
+lemminflect>=0.2.3
+pyspellchecker>=0.7
+python-docx>=1.1
+python-multipart>=0.0.9

@@ -1,0 +1,49 @@
+# GitHub Actions 工作流：推送到 main 时执行冒烟测试（CI 质量门禁）。
+#
+# 关键说明：本项目是 FastAPI + SQLite 后端应用，GitHub Pages（纯静态）无法运行后端，
+#   因此「真正的部署」由 Render 按仓库根目录的 render.yaml 原生自动完成（push 即部署），
+#   本工作流不负责部署动作，仅做发布前的校验（启动应用并探活 /api/health）。
+#
+# 若你希望「CI 通过后才触发部署」，可额外使用 Render 的 Deploy Hook：
+#   在 Render 服务 Settings → Deploy Hook 复制 URL，存到 GitHub 仓库的
+#   Settings → Secrets and variables → Actions → New secret（名 RENDER_DEPLOY_HOOK），
+#   然后取消下方 deploy 任务块首行的 # 注释即可。
+name: CI（冒烟测试）
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 启动应用并探活 /api/health
+        run: |
+          uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8000/api/health && exit 0
+            sleep 1
+          done
+          echo "应用未在预期时间内就绪" >&2
+          exit 1
+
+  # 可选：CI 通过后，用 Deploy Hook 触发 Render 部署
+  # deploy:
+  #   needs: smoke-test
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: 触发 Render 部署
+  #       run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
