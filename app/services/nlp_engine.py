@@ -274,9 +274,13 @@ def build_links(word: str) -> list:
     ]
 
 
-def analyze(raw: str) -> dict:
+def analyze(raw: str, *, with_extras: bool = True) -> dict:
     """
     核心分析入口：输入原始字符串，返回结构化结果，非法时抛 InvalidWordError。
+
+    with_extras=False 时只返回 base/pos/pos_label，跳过形近词与屈折形态等展示计算。
+    docx 导入只需词根与词性，走轻量路径可避免对生僻词做昂贵的编辑距离二级展开
+    （edits2，约 20 万次字符串操作），否则云端批量导入会慢到像卡死。
     """
     word = (raw or "").strip().lower()
 
@@ -321,6 +325,23 @@ def analyze(raw: str) -> dict:
             msg += f"，你是否想输入 “{suggestion}”？"
         raise InvalidWordError(msg)
 
+    # --- 词性中文标签（轻量导入路径也需用到，作为 primary_pos） ---
+    if base == word:
+        pos_label = _pos_label_for(word, lemma_map, pos)
+    else:
+        pos_label = UPOS_LABELS.get(pos or "", "")
+
+    # 轻量路径：docx 导入只需词根 + 词性，跳过形近词/屈折形态等展示计算，
+    # 避免对生僻词做昂贵的编辑距离二级展开（edits2）导致云端导入极慢。
+    if not with_extras:
+        return {
+            "valid": True,
+            "input": word,
+            "base": base,
+            "pos": pos,
+            "pos_label": pos_label,
+        }
+
     # --- 识别输入的屈折形态 ---
     form_tag: Optional[str] = None
     if base == word:
@@ -335,10 +356,8 @@ def analyze(raw: str) -> dict:
 
     # --- 高亮提示文本 ---
     if base == word:
-        pos_label = _pos_label_for(word, lemma_map, pos)
         highlight = f"{word} 是原形" + (f"（{pos_label}）" if pos_label else "")
     else:
-        pos_label = UPOS_LABELS.get(pos or "", "")
         highlight = f"{word} 是 {base} 的{form_label}"
 
     return {

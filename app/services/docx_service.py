@@ -144,7 +144,7 @@ def _process(job_id: str, file_bytes: bytes, filename: str) -> None:
         fallback = 0
         for w in raw_words:
             try:
-                nlp = nlp_engine.analyze(w)
+                nlp = nlp_engine.analyze(w, with_extras=False)
                 lemma_infos.setdefault(nlp["base"], nlp.get("pos_label"))
             except nlp_engine.InvalidWordError:
                 fallback += 1
