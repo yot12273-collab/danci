@@ -18,7 +18,8 @@ class Word(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="users.id", index=True, ondelete="CASCADE")
     lemma: str = Field(max_length=64)
-    primary_pos: str | None = Field(default=None, max_length=16)
+    # 主要词性标签：可能是多个词性拼接（如「名词 / 动词 / 形容词 / 副词」），放宽到 64
+    primary_pos: str | None = Field(default=None, max_length=64)
     phonetic: str | None = Field(default=None, max_length=64)
     # 完整释义（JSON 字符串，存所有词性条目）
     translation: str | None = Field(default=None)
