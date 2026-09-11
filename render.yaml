@@ -12,3 +12,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.4"
+      # 主业务库连接串（含密码，不入库）。部署后在 Render Dashboard →
+      # Environment → 手动填 Supabase / Neon 的 Postgres 连接串；
+      # sync:false 表示该变量由控制台维护，蓝图部署不会覆盖或清空它。
+      - key: DATABASE_URL
+        sync: false

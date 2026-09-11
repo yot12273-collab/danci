@@ -9,21 +9,39 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from .config import settings
 
-# SQLite 单文件；check_same_thread=False 允许在线程池中复用连接
-engine = create_engine(
-    # 用 as_posix() 保证 Windows 路径的斜杠方向正确，SQLAlchemy 才能正确解析
-    f"sqlite:///{settings.db_path.as_posix()}",
-    connect_args={"check_same_thread": False},
-)
+
+def _normalize_db_url(url: str) -> str:
+    """补全 Postgres 驱动后缀：Supabase / Neon 通常给 postgresql:// 或 postgres://，
+    SQLAlchemy 需要显式驱动（+psycopg2），此处统一改写，避免「无法确定 DBAPI」报错。"""
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg2://" + url[len("postgresql://"):]
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg2://" + url[len("postgres://"):]
+    return url
 
 
-@event.listens_for(engine, "connect")
-def _set_sqlite_pragma(dbapi_conn, _record):
-    """每个连接开启外键约束与 WAL 日志，保证级联删除与并发读写。"""
-    cur = dbapi_conn.cursor()
-    cur.execute("PRAGMA foreign_keys=ON")
-    cur.execute("PRAGMA journal_mode=WAL")
-    cur.close()
+# 数据库方言：设置了 DATABASE_URL 走托管 Postgres（Render 持久化），否则本地 SQLite（开发）。
+# 托管 Postgres 每次部署为全新库，由 create_all 按最新模型直接建表，无需就地迁移。
+_IS_POSTGRES = bool(settings.database_url)
+
+if _IS_POSTGRES:
+    # 托管 Postgres：外键约束默认强制；pool_pre_ping 规避空闲断连（Supabase/Neon 会回收空闲连接）
+    engine = create_engine(_normalize_db_url(settings.database_url), pool_pre_ping=True)
+else:
+    # SQLite 单文件；check_same_thread=False 允许在线程池中复用连接
+    engine = create_engine(
+        # 用 as_posix() 保证 Windows 路径的斜杠方向正确，SQLAlchemy 才能正确解析
+        f"sqlite:///{settings.db_path.as_posix()}",
+        connect_args={"check_same_thread": False},
+    )
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _record):
+        """每个连接开启外键约束与 WAL 日志（SQLite 专属；Postgres 无需且不支持 PRAGMA）。"""
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.close()
 
 
 def _migrate_recite_tables() -> None:
@@ -160,9 +178,11 @@ def init_db() -> None:
     """建表（幂等）。需先导入 models 以注册所有表模型。"""
     from . import models  # noqa: F401  确保模型已注册到 metadata
 
-    _migrate_search_history_table()
-    _migrate_recite_tables()
-    _migrate_owner_tables()
+    # SQLite 旧库需就地迁移（加列 / 换唯一索引）；托管 Postgres 为全新库，直接建表即可
+    if not _IS_POSTGRES:
+        _migrate_search_history_table()
+        _migrate_recite_tables()
+        _migrate_owner_tables()
     SQLModel.metadata.create_all(engine)
 
 

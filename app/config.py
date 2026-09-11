@@ -16,9 +16,14 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 class Settings:
     app_name = "英语词汇学习助手"
-    version = "1.2.0"
+    version = "1.3.0"
 
-    # 业务数据库 / 中文词典数据库路径
+    # 主业务数据库连接串：本地开发不设置（用下方 SQLite 文件）；
+    # 部署到 Render 时设置 DATABASE_URL 指向托管 Postgres（Supabase / Neon 等），
+    # 数据由此持久化，不再受 Render 临时文件系统清空影响。
+    database_url: str = os.getenv("DATABASE_URL", "")
+
+    # 业务数据库（SQLite 本地路径）/ 中文词典数据库路径
     db_path: Path = DATA_DIR / "app.db"
     dict_db_path: Path = DATA_DIR / "dict.sqlite"
 

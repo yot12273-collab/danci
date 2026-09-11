@@ -3,6 +3,8 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 sqlmodel>=0.0.14
+# PostgreSQL 驱动：部署到 Render 时主业务库走托管 Postgres（Supabase/Neon），本地仍用 SQLite
+psycopg2-binary>=2.9
 # 词形还原 / 拼写校验：包内各自捆绑模型与词表（lemminflect 的 pkl 模型、pyspellchecker 的 en.json.gz）。
 # 固定版本，避免资源加载方式随版本漂移，导致云端 docx 导入“有效=0”这类隐性故障。
 lemminflect==0.2.3
