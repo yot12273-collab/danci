@@ -133,6 +133,7 @@ async function doLogout() {
     await api('/api/auth/logout', { method: 'POST' });
   } catch (e) { /* 忽略：本地 token 照常清除 */ }
   clearToken();
+  resetTransientState();   // 销毁本账号的内存态，杜绝账号 A 残留被账号 B 看到
   showLogin();
   toast('已退出登录');
 }
@@ -1352,6 +1353,27 @@ $('reciteTestFeedback').addEventListener('click', (e) => {
 
 // ---------- 启动 ----------
 // 门禁：无 token 直接进登录；有 token 先校验 /api/auth/me（失效时 api() 自动清 token 并弹登录层）
+
+// 登出时销毁全部「前端内存态」：闪卡进度、背诵运行态/预加载队列、组测验态、查词/标签临时态。
+// 这些状态本就只存 JS 内存（绝不落库），退出账号或刷新页面即销毁——满足「测试进度 / 临时抽词
+// 状态纯前端化」的红线，同时避免账号 A 的残留数据在账号 B 登录后被看到。
+function resetTransientState() {
+  stopCountdown();
+  // 闪卡测试进度
+  quizCards = []; quizIndex = 0; quizMode = 'en2zh'; quizLocked = false;
+  clearTimeout(quizTimer); quizTimer = null; quizAnswers = []; quizEditable = [];
+  // 背诵运行态 + 预加载队列（含组测验态）
+  appMode = MODE_RECITE;
+  reciteWords = []; reciteIndex = 0; reciteChunkIndex = 1; reciteChunkTotal = 0;
+  reciteFetchDone = false; reciteStarted = false; isFetching = false; reciteShuffleSeed = 0;
+  reciteRemain = reciteIntervalSec; reciteRunning = false;
+  gTestCards = []; gTestIndex = 0; gTestLocked = false;
+  recitePlanData = null; currentReciteTagId = null; currentReciteTagName = '';
+  // 查词 / 标签临时态
+  lastAnalyze = null; currentTagId = null;
+  currentDetailTagId = null; currentDetailTagName = '';
+}
+
 async function bootstrap() {
   if (!getToken()) { showLogin(); return; }
   try {

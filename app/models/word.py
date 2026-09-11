@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""单词表（生词库，按词根去重）。"""
+"""单词表（生词库，按账号隔离：词根仅在同一账号内去重）。"""
 from __future__ import annotations
 
 from datetime import datetime
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from ..utils.time import utcnow
@@ -11,9 +12,12 @@ from ..utils.time import utcnow
 
 class Word(SQLModel, table=True):
     __tablename__ = "words"
+    # 同一账号内词根唯一（跨账号允许重复导入同一词）；数据隔离的数据库级兜底
+    __table_args__ = (UniqueConstraint("user_id", "lemma", name="uq_word_user_lemma"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    lemma: str = Field(max_length=64, unique=True, index=True)
+    user_id: int = Field(foreign_key="users.id", index=True, ondelete="CASCADE")
+    lemma: str = Field(max_length=64)
     primary_pos: str | None = Field(default=None, max_length=16)
     phonetic: str | None = Field(default=None, max_length=64)
     # 完整释义（JSON 字符串，存所有词性条目）

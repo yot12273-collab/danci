@@ -48,22 +48,22 @@ def _update(job_id: str, **kw) -> None:
         _jobs[job_id].update(kw)
 
 
-def create_job(file_bytes: bytes, filename: str) -> str:
-    """创建导入任务并启动后台线程，返回 job_id。"""
+def create_job(file_bytes: bytes, filename: str, user_id: int) -> str:
+    """创建导入任务并启动后台线程，返回 job_id（任务与导入词均归属当前账号）。"""
     if not (filename or "").lower().endswith(".docx"):
         raise AppError(ERR_UNSUPPORTED_TYPE, "仅支持 .docx 文件", http_status=415)
     if len(file_bytes) > settings.max_upload_size:
         raise AppError(ERR_FILE_TOO_LARGE, "文件过大（上限 10MB）", http_status=413)
 
     job_id = uuid.uuid4().hex
-    _jobs[job_id] = {"status": "queued", "progress": {}, "filename": filename}
-    threading.Thread(target=_process, args=(job_id, file_bytes, filename), daemon=True).start()
+    _jobs[job_id] = {"status": "queued", "progress": {}, "filename": filename, "user_id": user_id}
+    threading.Thread(target=_process, args=(job_id, file_bytes, filename, user_id), daemon=True).start()
     return job_id
 
 
-def get_job(job_id: str) -> dict:
+def get_job(job_id: str, user_id: int) -> dict:
     job = _jobs.get(job_id)
-    if job is None:
+    if job is None or job.get("user_id") != user_id:
         raise AppError(ERR_NOT_FOUND, "任务不存在", http_status=404)
     return {
         "job_id": job_id,
@@ -120,7 +120,7 @@ def _extract_docx_text(file_bytes: bytes) -> list[str]:
             pass
 
 
-def _process(job_id: str, file_bytes: bytes, filename: str) -> None:
+def _process(job_id: str, file_bytes: bytes, filename: str, user_id: int) -> None:
     _update(job_id, status="processing")
     try:
         texts = _extract_docx_text(file_bytes)
@@ -159,22 +159,27 @@ def _process(job_id: str, file_bytes: bytes, filename: str) -> None:
             "valid": valid, "skipped": skipped,
         })
 
-        # 3) 入库：以文件名建标签，单词批量入库并关联
+        # 3) 入库：以文件名建标签（归属当前账号），单词批量入库并关联
         tag_name = Path(filename).stem or "未命名"
         inserted = duplicates = 0
         with session_scope() as session:
-            tag = session.exec(select(Tag).where(Tag.name == tag_name)).first()
+            tag = session.exec(
+                select(Tag).where(Tag.name == tag_name, Tag.user_id == user_id)
+            ).first()
             if tag is None:
-                tag = Tag(name=tag_name)
+                tag = Tag(name=tag_name, user_id=user_id)
                 session.add(tag)
                 session.flush()
 
             for lemma, pos_label in lemma_infos.items():
                 trans = dictionary.lookup(lemma)
-                word = session.exec(select(Word).where(Word.lemma == lemma)).first()
+                word = session.exec(
+                    select(Word).where(Word.lemma == lemma, Word.user_id == user_id)
+                ).first()
                 if word is None:
                     word = Word(
                         lemma=lemma,
+                        user_id=user_id,
                         primary_pos=pos_label,
                         phonetic=trans["phonetic"] if trans else None,
                         short_meaning=trans["short_meaning"] if trans else None,

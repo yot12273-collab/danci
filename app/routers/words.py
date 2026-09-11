@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""单词相关接口。"""
+"""单词相关接口（均按当前登录账号隔离）。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
@@ -24,24 +24,25 @@ def list_words(
     page_size: int = Query(20, ge=1, le=500),
     tag_id: int | None = Query(None),
     q: str | None = Query(None),
+    user: CurrentUser = Depends(get_current_user),
 ):
-    """生词库列表（支持按标签过滤 / 词根搜索 / 分页）。"""
-    return ok(word_service.list_words(page, page_size, tag_id, q))
+    """生词库列表（支持按标签过滤 / 词根搜索 / 分页，仅返回当前账号数据）。"""
+    return ok(word_service.list_words(page, page_size, tag_id, q, user.id))
 
 
 @router.post("")
-def add_word(body: WordCreate):
-    """手动添加单词。"""
-    return ok(word_service.add_word(body.word, body.tag_ids))
+def add_word(body: WordCreate, user: CurrentUser = Depends(get_current_user)):
+    """手动添加单词（归属当前账号）。"""
+    return ok(word_service.add_word(body.word, body.tag_ids, user.id))
 
 
 @router.delete("/{word_id}")
-def delete_word(word_id: int):
-    """删除单词。"""
-    return ok(word_service.delete_word(word_id))
+def delete_word(word_id: int, user: CurrentUser = Depends(get_current_user)):
+    """删除单词（仅限当前账号单词）。"""
+    return ok(word_service.delete_word(word_id, user.id))
 
 
 @router.put("/{word_id}/tags")
-def set_tags(word_id: int, body: WordSetTags):
-    """覆盖式设置单词标签。"""
-    return ok(word_service.set_word_tags(word_id, body.tag_ids))
+def set_tags(word_id: int, body: WordSetTags, user: CurrentUser = Depends(get_current_user)):
+    """覆盖式设置单词标签（单词与标签均须归属当前账号）。"""
+    return ok(word_service.set_word_tags(word_id, body.tag_ids, user.id))

@@ -158,17 +158,19 @@ def _compute_chunks(plan_type: str, param: float, total: int) -> tuple[int, int]
     return chunk_size, total_chunks
 
 
-def _get_tag(session, tag_id: int) -> Tag:
-    """校验标签存在；不存在则 404。"""
-    tag = session.get(Tag, tag_id)
+def _get_tag(session, tag_id: int, user_id: int) -> Tag:
+    """校验标签归属当前账号；不存在（含他人标签）则 404。"""
+    tag = session.exec(
+        select(Tag).where(Tag.id == tag_id, Tag.user_id == user_id)
+    ).first()
     if tag is None:
         raise AppError(ERR_NOT_FOUND, "标签不存在", http_status=404)
     return tag
 
 
-def _get_active_plan(session, tag_id: int) -> RecitePlan:
-    """取指定标签下的唯一计划；标签或计划不存在则 404。"""
-    _get_tag(session, tag_id)
+def _get_active_plan(session, tag_id: int, user_id: int) -> RecitePlan:
+    """取指定标签下的唯一计划；标签或计划不存在则 404（标签须归属当前账号）。"""
+    _get_tag(session, tag_id, user_id)
     plan = session.exec(
         select(RecitePlan).where(RecitePlan.tag_id == tag_id)
     ).first()
@@ -177,17 +179,17 @@ def _get_active_plan(session, tag_id: int) -> RecitePlan:
     return plan
 
 
-def _build_plan(session, tag_id: int, plan_type: str, param: float, interval_seconds: int, shuffle_chunk: bool, sequence: str, show_next_button: bool = True) -> dict:
+def _build_plan(session, tag_id: int, plan_type: str, param: float, interval_seconds: int, shuffle_chunk: bool, sequence: str, show_next_button: bool = True, user_id: int | None = None) -> dict:
     """在当前会话内完成「抽取词库 → 洗牌 → 分块 → 写入」，返回计划摘要。
 
     供「全新创建」与「彻底重置（内容变动）」两处复用；任何校验失败抛出 AppError，
     由外层 session_scope 回滚，绝不留下半成品数据。背诵序列在此解析并固化写入主表。
     """
-    # 取该标签下全部单词 id（仅当前标签词库）
+    # 取该标签下全部单词 id（仅当前账号的标签词库）
     word_ids = session.exec(
         select(Word.id)
         .join(TagWord)
-        .where(TagWord.tag_id == tag_id)
+        .where(TagWord.tag_id == tag_id, Word.user_id == user_id)
         .order_by(Word.id)
     ).all()
     total = len(word_ids)
@@ -237,17 +239,17 @@ def _delete_plan(session, plan: RecitePlan) -> None:
     session.delete(plan)
 
 
-def get_plan(tag_id: int) -> dict | None:
+def get_plan(tag_id: int, user_id: int) -> dict | None:
     """查询指定标签的计划及分组结构；无计划时返回 None。"""
     with session_scope() as session:
-        _get_tag(session, tag_id)
+        _get_tag(session, tag_id, user_id)
         plan = session.exec(
             select(RecitePlan).where(RecitePlan.tag_id == tag_id)
         ).first()
         return _plan_to_dict(session, plan) if plan else None
 
 
-def save_plan(tag_id: int, plan_type: str, param: float, interval_seconds: int, shuffle_chunk: bool = False, sequence: str = "", show_next_button: bool = True) -> dict:
+def save_plan(tag_id: int, plan_type: str, param: float, interval_seconds: int, shuffle_chunk: bool = False, sequence: str = "", show_next_button: bool = True, user_id: int | None = None) -> dict:
     """智能保存背诵计划：新建 / 局部更新（仅改行为参数）/ 彻底重置（改内容参数）。
 
     参数划分为两类：
@@ -278,7 +280,7 @@ def save_plan(tag_id: int, plan_type: str, param: float, interval_seconds: int, 
     sequence = sequence or ""
 
     with session_scope() as session:
-        _get_tag(session, tag_id)
+        _get_tag(session, tag_id, user_id)
         existing = session.exec(
             select(RecitePlan).where(RecitePlan.tag_id == tag_id)
         ).first()
@@ -302,18 +304,18 @@ def save_plan(tag_id: int, plan_type: str, param: float, interval_seconds: int, 
             _delete_plan(session, existing)
             action = "reset"
 
-        result = _build_plan(session, tag_id, plan_type, param, interval_seconds, shuffle_chunk, sequence, show_next_button)
+        result = _build_plan(session, tag_id, plan_type, param, interval_seconds, shuffle_chunk, sequence, show_next_button, user_id)
         return {"action": action, **result}
 
 
-def reset_plan(tag_id: int) -> None:
+def reset_plan(tag_id: int, user_id: int) -> None:
     """中止/重置指定标签：删除其计划主表及单词快照。
 
     显式先删快照、再删主表，不依赖数据库外键级联——即使外键约束未开启，
     也不会残留孤儿快照数据（避免下次建计划时因 plan_id 复用导致 seq 冲突）。
     """
     with session_scope() as session:
-        _get_tag(session, tag_id)
+        _get_tag(session, tag_id, user_id)
         plan = session.exec(
             select(RecitePlan).where(RecitePlan.tag_id == tag_id)
         ).first()
@@ -322,7 +324,7 @@ def reset_plan(tag_id: int) -> None:
         _delete_plan(session, plan)
 
 
-def advance_sequence(tag_id: int) -> dict:
+def advance_sequence(tag_id: int, user_id: int) -> dict:
     """背诵序列无限循环路由：将 current_sequence_index 前进一位（取模回绕）。
 
     核心公式 (current_sequence_index + 1) % len(sequence_list)，实现 1->2->3->1->2->3
@@ -330,7 +332,7 @@ def advance_sequence(tag_id: int) -> dict:
     返回下一个切片序号及更新后的指针，前端据此加载对应切片并立即开始倒计时。
     """
     with session_scope() as session:
-        plan = _get_active_plan(session, tag_id)
+        plan = _get_active_plan(session, tag_id, user_id)
 
         seq = _sequence_of(plan)
         if not seq:
@@ -354,7 +356,7 @@ def advance_sequence(tag_id: int) -> dict:
     }
 
 
-def get_chunk(tag_id: int, index: int, offset: int = 0, limit: int = 10, seed: int = 0) -> dict:
+def get_chunk(tag_id: int, index: int, offset: int = 0, limit: int = 10, seed: int = 0, user_id: int | None = None) -> dict:
     """取指定标签第 index 份（1 起）的单词详情切片，供前端「小步快跑」分批拉取。
 
     为控制单次接口耗时（约 10 词 ≈ 4s），本接口按 offset/limit 只返回一批，
@@ -365,7 +367,7 @@ def get_chunk(tag_id: int, index: int, offset: int = 0, limit: int = 10, seed: i
     同一种子下多批请求的先后顺序一致（切片内打乱跨批次不乱序、不重不漏）。
     """
     with session_scope() as session:
-        plan = _get_active_plan(session, tag_id)
+        plan = _get_active_plan(session, tag_id, user_id)
 
         # 份序号越界校验
         if index < 1 or index > plan.total_chunks:
@@ -387,12 +389,14 @@ def get_chunk(tag_id: int, index: int, offset: int = 0, limit: int = 10, seed: i
             .order_by(RecitePlanWord.seq)
         ).all()
 
-        # 按快照顺序还原词根列表（被删词已级联移除，直接跳过）
+        # 按快照顺序还原词根列表（被删词已级联移除，直接跳过；并按账号兜底过滤）
         lemmas: list[str] = []
         if word_ids:
             word_map = {
                 w.id: w
-                for w in session.exec(select(Word).where(Word.id.in_(word_ids))).all()
+                for w in session.exec(
+                    select(Word).where(Word.id.in_(word_ids), Word.user_id == user_id)
+                ).all()
             }
             lemmas = [word_map[wid].lemma for wid in word_ids if wid in word_map]
 
@@ -406,8 +410,8 @@ def get_chunk(tag_id: int, index: int, offset: int = 0, limit: int = 10, seed: i
 
     batch = lemmas[offset : offset + limit]
 
-    # 批量生成完整搜索详情（独立会话，不写历史），仅处理本批
-    words = batch_details(batch) if batch else []
+    # 批量生成完整搜索详情（独立会话，不写历史），仅处理本批（收藏态按当前账号判定）
+    words = batch_details(batch, user_id) if batch else []
 
     return {
         "chunk_index": index,          # 第几份（1 起）

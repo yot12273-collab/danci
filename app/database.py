@@ -101,12 +101,68 @@ def _migrate_search_history_table() -> None:
             )
 
 
+# 存量数据（迁移前无 user_id 的标签 / 单词 / 分组）统一归属的账号用户名。
+# 与用户确认：现有 3 标签 / 3469 词 / 1 份背诵分组全部划给账号「1」。
+LEGACY_OWNER_USERNAME = "1"
+
+
+def _legacy_owner_id(conn) -> int:
+    """解析存量数据归属账号的用户 id；账号「1」不存在时回退 id=1（由 seed_users 兜底创建）。"""
+    row = conn.exec_driver_sql(
+        f"SELECT id FROM users WHERE username = '{LEGACY_OWNER_USERNAME}' LIMIT 1"
+    ).fetchone()
+    return int(row[0]) if row else 1
+
+
+def _migrate_owner_tables() -> None:
+    """给 tags / words 表补 user_id 列，把「全局唯一」改造为「按账号隔离」。
+
+    旧版 tags / words 无归属字段，name / lemma 全局唯一（所有账号共用一套数据）。
+    改造需两步：
+    1. 补可空 user_id 列，并把存量行统一归属账号「1」（LEGACY_OWNER_USERNAME）；
+    2. 删除 name / lemma 的全局唯一索引，改为 (user_id, name) / (user_id, lemma) 复合唯一，
+       否则 A 账号已建「英语」标签会挡住 B 账号再建同名标签。
+
+    SQLite 无法就地改唯一约束，这里用「加列 + 删旧唯一索引 + 建复合唯一索引」三步完成，
+    不重建表、不动主键与外键引用，最稳妥；幂等（已含 user_id 列时直接跳过）。
+    """
+    insp = inspect(engine)
+    table_names = set(insp.get_table_names())
+    # 两张表都不存在（全新库）→ 交由 create_all 按最新模型建表，无需迁移
+    if "tags" not in table_names and "words" not in table_names:
+        return
+
+    with engine.begin() as conn:
+        owner = _legacy_owner_id(conn)
+
+        if "tags" in table_names:
+            cols = {c["name"] for c in insp.get_columns("tags")}
+            if "user_id" not in cols:
+                conn.exec_driver_sql("ALTER TABLE tags ADD COLUMN user_id INTEGER")
+                conn.exec_driver_sql("DROP INDEX IF EXISTS ix_tags_name")
+                conn.exec_driver_sql(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_tag_user_name ON tags(user_id, name)"
+                )
+                conn.exec_driver_sql(f"UPDATE tags SET user_id = {owner}")
+
+        if "words" in table_names:
+            cols = {c["name"] for c in insp.get_columns("words")}
+            if "user_id" not in cols:
+                conn.exec_driver_sql("ALTER TABLE words ADD COLUMN user_id INTEGER")
+                conn.exec_driver_sql("DROP INDEX IF EXISTS ix_words_lemma")
+                conn.exec_driver_sql(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_word_user_lemma ON words(user_id, lemma)"
+                )
+                conn.exec_driver_sql(f"UPDATE words SET user_id = {owner}")
+
+
 def init_db() -> None:
     """建表（幂等）。需先导入 models 以注册所有表模型。"""
     from . import models  # noqa: F401  确保模型已注册到 metadata
 
     _migrate_search_history_table()
     _migrate_recite_tables()
+    _migrate_owner_tables()
     SQLModel.metadata.create_all(engine)
 
 

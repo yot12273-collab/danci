@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""单词服务：查词编排（NLP + 中文词典）、生词库 CRUD。"""
+"""单词服务：查词编排（NLP + 中文词典）、生词库 CRUD（严格按登录账号隔离）。"""
 from __future__ import annotations
 
 import json
 
-from sqlmodel import func, select
+from sqlmodel import Session, func, select
 
 from ..database import session_scope
 from ..models import Tag, TagWord, Word
@@ -27,18 +27,40 @@ def _enrich(nlp: dict) -> dict:
 
 
 def _tags_of(session, word_id: int) -> list[dict]:
+    """取某词关联的全部标签（词已按账号校验，关联的标签即该账号标签，无需再过滤）。"""
     rows = session.exec(
         select(Tag).join(TagWord).where(TagWord.word_id == word_id)
     ).all()
     return [{"id": t.id, "name": t.name, "color": t.color} for t in rows]
 
 
-def _analyze(raw: str, record_history: bool, user_id: int | None = None) -> dict:
+def _get_owned_word(session: Session, word_id: int, user_id: int) -> Word:
+    """按「id + user_id」取当前账号的单词；不存在（含他人单词）统一 404，杜绝越权访问。"""
+    word = session.exec(
+        select(Word).where(Word.id == word_id, Word.user_id == user_id)
+    ).first()
+    if word is None:
+        raise AppError(ERR_NOT_FOUND, "单词不存在", http_status=404)
+    return word
+
+
+def _validate_tag_ids(session: Session, tag_ids: list[int], user_id: int) -> None:
+    """校验传入标签均归属当前账号；任一越权/不存在即 404，杜绝把词挂到他人标签。"""
+    for tid in dict.fromkeys(tag_ids):
+        exists = session.exec(
+            select(Tag).where(Tag.id == tid, Tag.user_id == user_id)
+        ).first()
+        if exists is None:
+            raise AppError(ERR_NOT_FOUND, f"标签 {tid} 不存在", http_status=404)
+
+
+def _analyze(raw: str, user_id: int, record_history: bool) -> dict:
     """查词核心：NLP 分析 + 中文释义补全，返回完整详情（供搜索与背诵复用）。
 
     record_history=False 时不写查询历史，供背诵轮播复用（避免污染历史记录）。
     返回结构与搜索完全一致：{base, phonetic, translations, short_meaning,
     pos_label, highlight, forms, similar, links, is_saved, tags, ...}
+    「是否已收藏 / 标签」均按当前账号判定（Word 按 (lemma, user_id) 查）。
     """
     try:
         nlp = nlp_engine.analyze(raw)
@@ -49,7 +71,9 @@ def _analyze(raw: str, record_history: bool, user_id: int | None = None) -> dict
     lemma = nlp["base"]
 
     with session_scope() as session:
-        word = session.exec(select(Word).where(Word.lemma == lemma)).first()
+        word = session.exec(
+            select(Word).where(Word.lemma == lemma, Word.user_id == user_id)
+        ).first()
         is_saved = word is not None
         tags = _tags_of(session, word.id) if word else []
         if record_history:
@@ -67,20 +91,20 @@ def _analyze(raw: str, record_history: bool, user_id: int | None = None) -> dict
 
 def analyze_word(raw: str, user_id: int) -> dict:
     """查词入口：NLP 分析 + 中文释义，并写入当前用户的查询历史。"""
-    return _analyze(raw, record_history=True, user_id=user_id)
+    return _analyze(raw, user_id, record_history=True)
 
 
-def detail_for_word(raw: str) -> dict:
+def detail_for_word(raw: str, user_id: int) -> dict:
     """查词详情入口（背诵复用）：返回与搜索完全一致的详情，但不写查询历史。"""
-    return _analyze(raw, record_history=False)
+    return _analyze(raw, user_id, record_history=False)
 
 
-def batch_details(lemmas: list[str]) -> list[dict]:
+def batch_details(lemmas: list[str], user_id: int) -> list[dict]:
     """批量生成多个单词的完整搜索详情（背诵批量预加载，不写历史）。
 
     一次调用为「一份」内的所有词根生成与 analyze_word 完全一致的结构，
     前端据此只发一次网络请求即可拿到整份数据，避免逐词请求造成高频连接；
-    内部只开一个数据库会话批量取收藏态与标签，减少开销。
+    内部只开一个数据库会话批量取收藏态与标签（均按当前账号判定），减少开销。
     对单个词根分析失败（极端情况）时跳过该词，不拖垮整份。
     """
     results: list[dict] = []
@@ -88,10 +112,12 @@ def batch_details(lemmas: list[str]) -> list[dict]:
         return results
 
     with session_scope() as session:
-        # 批量取已收藏的 Word（按词根映射），避免逐词查询
+        # 批量取当前账号已收藏的 Word（按词根映射），避免逐词查询
         saved = {
             w.lemma: w
-            for w in session.exec(select(Word).where(Word.lemma.in_(lemmas))).all()
+            for w in session.exec(
+                select(Word).where(Word.lemma.in_(lemmas), Word.user_id == user_id)
+            ).all()
         }
         for lemma in lemmas:
             try:
@@ -115,22 +141,20 @@ def batch_details(lemmas: list[str]) -> list[dict]:
 
 
 def list_words(page: int = 1, page_size: int = 20,
-               tag_id: int | None = None, q: str | None = None) -> dict:
+               tag_id: int | None = None, q: str | None = None,
+               user_id: int | None = None) -> dict:
     with session_scope() as session:
-        # 计数
-        count_stmt = select(func.count()).select_from(Word)
+        # 无条件按账号过滤：即便传入他人 tag_id，也绝不越权返回他人单词
+        count_stmt = select(func.count()).select_from(Word).where(Word.user_id == user_id)
+        stmt = select(Word).where(Word.user_id == user_id)
         if tag_id is not None:
             count_stmt = count_stmt.join(TagWord).where(TagWord.tag_id == tag_id)
-        if q:
-            count_stmt = count_stmt.where(Word.lemma.contains(q.strip().lower()))
-        total = session.exec(count_stmt).one()
-
-        # 分页查询
-        stmt = select(Word)
-        if tag_id is not None:
             stmt = stmt.join(TagWord).where(TagWord.tag_id == tag_id)
         if q:
+            count_stmt = count_stmt.where(Word.lemma.contains(q.strip().lower()))
             stmt = stmt.where(Word.lemma.contains(q.strip().lower()))
+        total = session.exec(count_stmt).one()
+
         words = session.exec(
             stmt.order_by(Word.created_at.desc())
             .offset((page - 1) * page_size)
@@ -152,7 +176,7 @@ def list_words(page: int = 1, page_size: int = 20,
 
 
 def _link_tags(session, word_id: int, tag_ids: list[int]) -> None:
-    """追加关联标签（已存在的跳过，不覆盖）。"""
+    """追加关联标签（已存在的跳过，不覆盖）。调用前须已校验标签归属当前账号。"""
     for tid in dict.fromkeys(tag_ids):  # dict.fromkeys 去重且保序
         exists = session.exec(
             select(TagWord).where(TagWord.tag_id == tid, TagWord.word_id == word_id)
@@ -161,8 +185,8 @@ def _link_tags(session, word_id: int, tag_ids: list[int]) -> None:
             session.add(TagWord(tag_id=tid, word_id=word_id))
 
 
-def add_word(raw_word: str, tag_ids: list[int] | None = None) -> dict:
-    """手动添加单词到生词库（按词根去重，重复则更新释义）。"""
+def add_word(raw_word: str, tag_ids: list[int] | None, user_id: int) -> dict:
+    """手动添加单词到生词库（按「账号内」词根去重，重复则更新释义）。"""
     try:
         nlp = nlp_engine.analyze(raw_word)
     except nlp_engine.InvalidWordError as exc:
@@ -173,10 +197,14 @@ def add_word(raw_word: str, tag_ids: list[int] | None = None) -> dict:
     translation_json = json.dumps(enrich["translations"], ensure_ascii=False)
 
     with session_scope() as session:
-        word = session.exec(select(Word).where(Word.lemma == lemma)).first()
+        _validate_tag_ids(session, tag_ids or [], user_id)
+        word = session.exec(
+            select(Word).where(Word.lemma == lemma, Word.user_id == user_id)
+        ).first()
         if word is None:
             word = Word(
                 lemma=lemma,
+                user_id=user_id,
                 primary_pos=enrich["primary_pos"],
                 phonetic=enrich["phonetic"],
                 short_meaning=enrich["short_meaning"],
@@ -194,24 +222,18 @@ def add_word(raw_word: str, tag_ids: list[int] | None = None) -> dict:
     return {"id": word_id, "lemma": lemma, "short_meaning": enrich["short_meaning"]}
 
 
-def delete_word(word_id: int) -> None:
+def delete_word(word_id: int, user_id: int) -> None:
     with session_scope() as session:
-        word = session.get(Word, word_id)
-        if word is None:
-            raise AppError(ERR_NOT_FOUND, "单词不存在", http_status=404)
+        word = _get_owned_word(session, word_id, user_id)
         session.delete(word)
 
 
-def set_word_tags(word_id: int, tag_ids: list[int]) -> dict:
-    """覆盖式设置单词的标签。"""
+def set_word_tags(word_id: int, tag_ids: list[int], user_id: int) -> dict:
+    """覆盖式设置单词的标签（单词与标签均须归属当前账号）。"""
     tag_ids = list(dict.fromkeys(tag_ids))
     with session_scope() as session:
-        word = session.get(Word, word_id)
-        if word is None:
-            raise AppError(ERR_NOT_FOUND, "单词不存在", http_status=404)
-        for tid in tag_ids:
-            if session.get(Tag, tid) is None:
-                raise AppError(ERR_NOT_FOUND, f"标签 {tid} 不存在", http_status=404)
+        word = _get_owned_word(session, word_id, user_id)
+        _validate_tag_ids(session, tag_ids, user_id)
         # 删除旧关联
         for tw in session.exec(
             select(TagWord).where(TagWord.word_id == word_id)

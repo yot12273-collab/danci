@@ -157,10 +157,13 @@ def _generate_cards(words: list[Word], target: int, mode: str,
     return [_make_card(w, mode, words, global_meanings) for w in seq[:target]]
 
 
-def start_quiz(tag_id: int, target: int | None, mode: str) -> dict:
+def start_quiz(tag_id: int, target: int | None, mode: str, user_id: int) -> dict:
     """发起一场抽查：取标签下所有单词，生成完整题目序列（无状态、不落库）。"""
     with session_scope() as session:
-        tag = session.get(Tag, tag_id)
+        # 标签须归属当前账号；不存在（含他人标签）统一 404
+        tag = session.exec(
+            select(Tag).where(Tag.id == tag_id, Tag.user_id == user_id)
+        ).first()
         if tag is None:
             raise AppError(ERR_NOT_FOUND, "标签不存在", http_status=404)
         tag_name = tag.name  # 会话内先读取，避免 commit 后属性过期无法访问
@@ -168,15 +171,17 @@ def start_quiz(tag_id: int, target: int | None, mode: str) -> dict:
         words = session.exec(
             select(Word)
             .join(TagWord)
-            .where(TagWord.tag_id == tag_id)
+            .where(TagWord.tag_id == tag_id, Word.user_id == user_id)
             .order_by(Word.lemma)
         ).all()
         if not words:
             raise AppError(ERR_VALIDATION, "该标签下暂无单词，无法测试", http_status=422)
 
-        # 全局词库释义池（en2zh 干扰项兜底用）
+        # 当前账号词库释义池（en2zh 干扰项兜底用，绝不泄露他人单词释义）
         global_meanings = session.exec(
-            select(Word.short_meaning).where(Word.short_meaning.is_not(None))
+            select(Word.short_meaning).where(
+                Word.short_meaning.is_not(None), Word.user_id == user_id
+            )
         ).all()
 
         n = len(words)
