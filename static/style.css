@@ -643,3 +643,13 @@ button { font-family: inherit; }
 /* 底部状态控制区：暂停 / 返回列表，固定底部不收缩 */
 .recite-controls { display: flex; gap: 10px; margin-top: 10px; flex-shrink: 0; }
 .recite-controls .btn { flex: 1; }
+
+/* 组测验态：与运行态同属 #recitePanel，class 切换显隐（无页面跳转）；
+   复用 .quiz-card / .choice-* / .quiz-feedback，锁定一屏禁滚动 */
+.recite-test {
+  flex: 1; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column;
+  padding-top: 4px;
+}
+.recite-test .quiz-card { flex: 1; min-height: 0; }
+.recite-test .quiz-feedback { flex-shrink: 0; }

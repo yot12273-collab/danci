@@ -195,9 +195,17 @@
       <div id="reciteBody" class="recite-body"></div>
       <button id="reciteNextBtn" class="btn primary recite-advance">下一个</button>
       <div class="recite-controls">
+        <button id="reciteTestNowBtn" class="btn ghost">测验本份</button>
         <button id="recitePauseBtn" class="btn ghost">暂停</button>
         <button id="reciteBackListBtn" class="btn ghost">返回列表</button>
       </div>
+    </div>
+
+    <!-- 测验态：与运行态同属 #recitePanel，class 切换显隐（无页面跳转） -->
+    <div id="reciteTest" class="recite-test hidden">
+      <div class="recite-progress" id="reciteTestProgress"></div>
+      <div id="reciteTestCard" class="quiz-card"></div>
+      <div id="reciteTestFeedback" class="quiz-feedback hidden"></div>
     </div>
   </section>
 

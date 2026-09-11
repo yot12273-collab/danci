@@ -842,6 +842,15 @@ let reciteRemain = 5;            // 剩余秒数
 let reciteTimer = null;          // setInterval 句柄
 let reciteRunning = false;       // 计时是否在运行（false = 暂停）
 
+// ---- 背诵 / 测验 双模式状态机（同容器 class 切换，无页面跳转） ----
+const MODE_RECITE = 'RECITE';
+const MODE_TEST = 'TEST';
+let appMode = MODE_RECITE;        // 当前模式：RECITE 背诵 / TEST 测验
+let currentGroupViewed = [];      // 本份已展示（背诵过）的词，作测验候选池；测验后清空 → 已测词不重复
+let gTestCards = [];              // 组测验卡片序列（与全局 quizCards 完全隔离）
+let gTestIndex = 0;               // 组测验当前题号
+let gTestLocked = false;          // 当前题是否已判定
+
 // 打开指定标签的背诵面板：记录当前标签 → 拉取计划 → 渲染列表态或制定态
 async function openRecite(tagId, tagName) {
   currentReciteTagId = tagId;
@@ -992,6 +1001,10 @@ async function startReciteChunk(index) {
   reciteFetchDone = false;
   reciteStarted = false;
   isFetching = false;
+  // 重置背诵/测验状态机，避免残留上一份的测验态与候选池
+  appMode = MODE_RECITE;
+  currentGroupViewed = [];
+  gTestCards = []; gTestIndex = 0; gTestLocked = false;
   // 切片内打乱：每次进入本份生成新随机种子，后端据此确定性洗牌（同一次进入内各批顺序一致）
   reciteShuffleSeed = (recitePlanData && recitePlanData.shuffle_chunk)
     ? Math.floor(Math.random() * 2147483646) + 1
@@ -1045,6 +1058,7 @@ function maybeFetchRecite() {
 // 渲染当前单词：从内存缓存 reciteWords 取出完整详情并复用「单词搜索」UI（零网络）
 function renderReciteCard() {
   const d = reciteWords[reciteIndex];
+  currentGroupViewed.push(d);   // 每词展示即入组（测验候选池）；测验后清空实现「已测词不重复」
   $('reciteProgress').textContent = `第 ${reciteChunkIndex} 份 · 本份 ${reciteIndex + 1} / ${reciteChunkTotal}`;
   $('reciteBody').innerHTML = buildWordDetailHtml(d, { readonly: true });
   syncAdvanceButton();      // 依据当前下标同步推进按钮文字（下一个 ↔ 进入下一份）
@@ -1146,6 +1160,7 @@ function syncAdvanceButton() {
 // 非尾词 → 内存切到下一词；尾词 → 等同点击【进入下一份】触发循环序列。
 // 注意：尾词时定时器已被强制清除、双击也被拦截，因此尾词只能由「进入下一份」按钮触发本函数。
 function reciteNext() {
+  if (appMode !== MODE_RECITE) return;   // 测验中忽略背诵推进（run 面板已隐藏，防御性兜底）
   if (!reciteWords.length) return;   // 首批尚未加载完成时忽略推进（防止加载中双击/连点误触）
   // 越界守卫：下一词尚未入队且本份未拉完 → 静默补拉并保持当前卡片（不推进、不重置计时）。
   // 正常阅读速度下水位线已提前拉取，几乎不会走到；极端高频连点跳过时以此兜底，绝不越界取到 undefined。
@@ -1178,6 +1193,129 @@ async function goNextChunk() {
     await startReciteChunk(adv.chunk_index);
   } catch (e) { toast(e.message, false); }
 }
+
+// ============ 组测验（英译中 · 本份内干扰 · 与背诵同容器切换） ============
+// 「测验本份」手动触发：测「本份已背、有释义、未测过」的词；本份内其它词释义作干扰项。
+// 测验结束清空 currentGroupViewed（即「已测词不重复」），无缝切回背诵、恢复当前词计时，
+// 绝不刷新页面、绝不丢 pendingQueue 预加载数据。
+
+// Fisher-Yates 洗牌（返回新数组）：本地出题打乱选项 / 干扰项用
+function shuffleArray(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// 剥离词性前缀（如 "n. 苹果" → "苹果"），用于干扰项语义去重（与后端 _meaning_body 同义）
+function _meaningBody(m) {
+  const s = (m || '');
+  const i = s.indexOf(' ');
+  return i === -1 ? s : s.slice(i + 1);
+}
+
+// 本地出题：词已在内存（reciteWords）里，零网络、零加载态；干扰项取自本份已加载词
+function buildGroupTestCards(candidates) {
+  const pool = reciteWords.filter((w) => w.short_meaning);
+  return candidates.map((w) => {
+    const correct = w.short_meaning;
+    const seen = new Set([_meaningBody(correct)]);
+    const distractors = [];
+    const shuffled = shuffleArray(pool.filter((x) => x.base !== w.base));
+    for (const x of shuffled) {
+      if (distractors.length >= 3) break;
+      const b = _meaningBody(x.short_meaning);
+      if (seen.has(b)) continue;
+      seen.add(b);
+      distractors.push(x.short_meaning);
+    }
+    const options = shuffleArray([correct, ...distractors]);
+    return {
+      lemma: w.base, phonetic: w.phonetic, short_meaning: correct,
+      options, answer_index: options.indexOf(correct),
+    };
+  });
+}
+
+// 进入测验：暂停计时、切 TEST 态、同容器 class 切换显隐
+function startGroupTest() {
+  if (appMode === MODE_TEST) return;
+  const candidates = currentGroupViewed.filter((w) => w.short_meaning);   // 无释义词无法出英译中，跳过
+  if (!candidates.length) { toast('本份暂无可测验的词', false); return; }
+  gTestCards = buildGroupTestCards(candidates);
+  if (!gTestCards.length) { toast('本份暂无可测验的词', false); return; }
+  gTestIndex = 0;
+  gTestLocked = false;
+  appMode = MODE_TEST;
+  stopCountdown();                 // 暂停轮播计时
+  hide('reciteRun');
+  show('reciteTest');
+  renderGroupTestCard();
+}
+
+function renderGroupTestCard() {
+  const card = gTestCards[gTestIndex];
+  gTestLocked = false;
+  $('reciteTestProgress').textContent = `测验 ${gTestIndex + 1} / ${gTestCards.length}`;
+  $('reciteTestFeedback').classList.add('hidden');
+  $('reciteTestCard').innerHTML = `
+    <div class="choice-word">${escapeHtml(card.lemma)} ${spkBtn(card.lemma)}</div>
+    ${card.phonetic ? `<div class="choice-phonetic">/${escapeHtml(card.phonetic)}/</div>` : ''}
+    <div class="choice-options">
+      ${card.options.map((o, i) => `<button class="choice-opt" data-i="${i}">${escapeHtml(o)}</button>`).join('')}
+    </div>`;
+}
+
+// 测验结束：清空本组（已测词不重复）→ 切回背诵 → 恢复当前词计时，无缝继续
+function resumeAfterTest() {
+  currentGroupViewed = [];         // 关键：清空候选池，已测词不再重复出现
+  appMode = MODE_RECITE;
+  gTestCards = []; gTestIndex = 0; gTestLocked = false;
+  hide('reciteTest');
+  show('reciteRun');
+  // 无缝恢复：当前词（reciteIndex）仍在队列里，直接重开其倒计时；不刷新、不丢预加载
+  resetCountdown();
+  startCountdown();
+}
+
+function nextGroupTestCard() {
+  gTestIndex += 1;
+  if (gTestIndex >= gTestCards.length) { resumeAfterTest(); return; }
+  renderGroupTestCard();
+}
+
+// 手动触发「测验本份」
+$('reciteTestNowBtn').addEventListener('click', () => {
+  if (appMode === MODE_TEST) return;
+  if (!currentGroupViewed.length) { toast('本份暂无可测验的词', false); return; }
+  startGroupTest();
+});
+
+// 组测验答题（事件委托，独立状态；答对自动跳题，答错显示反馈 + 继续）
+$('reciteTestCard').addEventListener('click', (e) => {
+  const opt = e.target.closest('.choice-opt');
+  if (!opt || gTestLocked) return;
+  gTestLocked = true;
+  const card = gTestCards[gTestIndex];
+  if (Number(opt.dataset.i) === card.answer_index) {
+    opt.classList.add('ok');
+    setTimeout(nextGroupTestCard, 450);
+  } else {
+    opt.classList.add('err');
+    const correct = $('reciteTestCard').querySelector(`.choice-opt[data-i="${card.answer_index}"]`);
+    if (correct) correct.classList.add('ok');
+    $('reciteTestFeedback').innerHTML =
+      `正确答案：<b class="green">${escapeHtml(card.options[card.answer_index])}</b>` +
+      `<button id="gTestNextBtn" class="btn primary">继续</button>`;
+    $('reciteTestFeedback').classList.remove('hidden');
+  }
+});
+
+$('reciteTestFeedback').addEventListener('click', (e) => {
+  if (e.target.closest('#gTestNextBtn')) nextGroupTestCard();
+});
 
 // ---------- 启动 ----------
 // 门禁：无 token 直接进登录；有 token 先校验 /api/auth/me（失效时 api() 自动清 token 并弹登录层）
