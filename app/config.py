@@ -16,7 +16,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 class Settings:
     app_name = "英语词汇学习助手"
-    version = "1.1.2"
+    version = "1.1.3"
 
     # 业务数据库 / 中文词典数据库路径
     db_path: Path = DATA_DIR / "app.db"

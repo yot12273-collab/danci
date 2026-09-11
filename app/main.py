@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
@@ -73,7 +73,13 @@ app.include_router(recite.router)
 
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(str(settings.static_dir / "index.html"))
+    """返回首页，并将 __VERSION__ 占位符替换为当前版本号（静态资源缓存破冰）。
+
+    前端 index.html 中 JS/CSS 的引用带 `?v=__VERSION__`，每次发版 bump version 后
+    资源 URL 变化，强制浏览器 / 中间缓存重新拉取，避免「HTML 已更新但 JS 仍旧」的缓存错位。
+    """
+    html = (settings.static_dir / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(html.replace("__VERSION__", settings.version))
 
 
 @app.get("/api/health", include_in_schema=False)
