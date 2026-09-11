@@ -214,6 +214,8 @@ button { font-family: inherit; }
 .btn.primary { background: var(--blue); color: #fff; }
 .btn.primary:active { background: var(--blue-dark); }
 .btn.primary:disabled { background: #cbd5e1; cursor: default; }
+/* 通用禁用态：出题准备期间按钮不可点（浅淡 + 默认光标），仅功能提示不做装饰 */
+.btn:disabled { cursor: default; opacity: .6; }
 .btn.ghost { background: #eef2ff; color: #4f46e5; }
 .btn.small { padding: 8px 14px; font-size: 14px; }
 .link-btn {

@@ -846,7 +846,6 @@ let reciteRunning = false;       // 计时是否在运行（false = 暂停）
 const MODE_RECITE = 'RECITE';
 const MODE_TEST = 'TEST';
 let appMode = MODE_RECITE;        // 当前模式：RECITE 背诵 / TEST 测验
-let currentGroupViewed = [];      // 本份已展示（背诵过）的词，作测验候选池；测验后清空 → 已测词不重复
 let gTestCards = [];              // 组测验卡片序列（与全局 quizCards 完全隔离）
 let gTestIndex = 0;               // 组测验当前题号
 let gTestLocked = false;          // 当前题是否已判定
@@ -1001,9 +1000,8 @@ async function startReciteChunk(index) {
   reciteFetchDone = false;
   reciteStarted = false;
   isFetching = false;
-  // 重置背诵/测验状态机，避免残留上一份的测验态与候选池
+  // 重置背诵/测验状态机，避免残留上一份的测验态与出题缓存
   appMode = MODE_RECITE;
-  currentGroupViewed = [];
   gTestCards = []; gTestIndex = 0; gTestLocked = false;
   // 切片内打乱：每次进入本份生成新随机种子，后端据此确定性洗牌（同一次进入内各批顺序一致）
   reciteShuffleSeed = (recitePlanData && recitePlanData.shuffle_chunk)
@@ -1058,7 +1056,6 @@ function maybeFetchRecite() {
 // 渲染当前单词：从内存缓存 reciteWords 取出完整详情并复用「单词搜索」UI（零网络）
 function renderReciteCard() {
   const d = reciteWords[reciteIndex];
-  currentGroupViewed.push(d);   // 每词展示即入组（测验候选池）；测验后清空实现「已测词不重复」
   $('reciteProgress').textContent = `第 ${reciteChunkIndex} 份 · 本份 ${reciteIndex + 1} / ${reciteChunkTotal}`;
   $('reciteBody').innerHTML = buildWordDetailHtml(d, { readonly: true });
   syncAdvanceButton();      // 依据当前下标同步推进按钮文字（下一个 ↔ 进入下一份）
@@ -1195,9 +1192,9 @@ async function goNextChunk() {
 }
 
 // ============ 组测验（英译中 · 本份内干扰 · 与背诵同容器切换） ============
-// 「测验本份」手动触发：测「本份已背、有释义、未测过」的词；本份内其它词释义作干扰项。
-// 测验结束清空 currentGroupViewed（即「已测词不重复」），无缝切回背诵、恢复当前词计时，
-// 绝不刷新页面、绝不丢 pendingQueue 预加载数据。
+// 「测验本份」手动触发：测本份「全部有释义的词」，顺序随机，题型仅英译中。
+// 中途点、本份尚未拉齐时先静默补拉剩余批次，拉齐整份再出题；干扰项取自本份全部词。
+// 测验结束无缝切回背诵、恢复当前词计时，绝不刷新页面、绝不丢预加载队列（reciteWords 全程保持不动）。
 
 // Fisher-Yates 洗牌（返回新数组）：本地出题打乱选项 / 干扰项用
 function shuffleArray(arr) {
@@ -1216,7 +1213,7 @@ function _meaningBody(m) {
   return i === -1 ? s : s.slice(i + 1);
 }
 
-// 本地出题：词已在内存（reciteWords）里，零网络、零加载态；干扰项取自本份已加载词
+// 本地出题：词已在内存（reciteWords）里，零网络、零加载态；干扰项取自本份全部词
 function buildGroupTestCards(candidates) {
   const pool = reciteWords.filter((w) => w.short_meaning);
   return candidates.map((w) => {
@@ -1239,20 +1236,59 @@ function buildGroupTestCards(candidates) {
   });
 }
 
-// 进入测验：暂停计时、切 TEST 态、同容器 class 切换显隐
-function startGroupTest() {
-  if (appMode === MODE_TEST) return;
-  const candidates = currentGroupViewed.filter((w) => w.short_meaning);   // 无释义词无法出英译中，跳过
-  if (!candidates.length) { toast('本份暂无可测验的词', false); return; }
-  gTestCards = buildGroupTestCards(candidates);
-  if (!gTestCards.length) { toast('本份暂无可测验的词', false); return; }
-  gTestIndex = 0;
-  gTestLocked = false;
+// 出题前把「本份」拉齐：未加载批次静默补齐，保证测验覆盖整份而非仅已背部分。
+// 已在途的请求先等其结束（isFetching 会令 fetchReciteBatch 早退，不等待则空转死循环）；
+// guard 上限 + 「无进展即止损」双重兜底，拉取失败或本份为空时必定退出，绝不空转。
+async function ensureReciteFull() {
+  let guard = 0;
+  while (!reciteFetchDone && guard++ < 300) {
+    if (isFetching) { await new Promise((r) => setTimeout(r, 120)); continue; }
+    const before = reciteWords.length;
+    await fetchReciteBatch();
+    if (!reciteFetchDone && reciteWords.length === before) break;   // 拉取失败 / 本份为空 → 止损退出
+  }
+}
+
+// 候选池：本份全部「有释义」的词（快照），并按词根防御性去重（同词根只出一次题）
+function collectTestCandidates() {
+  const seen = new Set();
+  return reciteWords.filter((w) => {
+    if (!w.short_meaning || !w.base || seen.has(w.base)) return false;
+    seen.add(w.base);
+    return true;
+  });
+}
+
+// 进入测验：暂停计时 → 置 TEST 态（阻断背诵推进与重复进入）→ 补拉拉齐整份 →
+// 全份词随机出题 → 同容器 class 切换。补拉期间按钮禁用 + 文字提示（禁弹窗）。
+async function startGroupTest() {
+  if (appMode === MODE_TEST) return;        // 已在测验态或出题准备中，防重入
+  const wasRunning = reciteRunning;         // 记住点击前的播放/暂停态，供出题失败回退时原样恢复
   appMode = MODE_TEST;
-  stopCountdown();                 // 暂停轮播计时
-  hide('reciteRun');
-  show('reciteTest');
-  renderGroupTestCard();
+  stopCountdown();                          // 暂停轮播计时
+  const btn = $('reciteTestNowBtn');
+  btn.disabled = true;
+  btn.textContent = '准备中…';
+  try {
+    await ensureReciteFull();               // 未加载批次先静默补齐，保证测「本份全部词」
+    gTestCards = buildGroupTestCards(shuffleArray(collectTestCandidates()));   // 全份随机顺序出题
+    if (!gTestCards.length) {
+      // 本份为空或全部无释义：回退背诵态并原样恢复计时，绝不把用户卡在测验态
+      appMode = MODE_RECITE;
+      if (wasRunning) startCountdown();
+      toast('本份暂无可测验的词', false);
+      return;
+    }
+    gTestIndex = 0;
+    gTestLocked = false;
+    stopCountdown();                        // 补拉期间 fetchReciteBatch 可能重启过计时，收尾再停一次
+    hide('reciteRun');
+    show('reciteTest');
+    renderGroupTestCard();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '测验本份';
+  }
 }
 
 function renderGroupTestCard() {
@@ -1268,9 +1304,8 @@ function renderGroupTestCard() {
     </div>`;
 }
 
-// 测验结束：清空本组（已测词不重复）→ 切回背诵 → 恢复当前词计时，无缝继续
+// 测验结束：切回背诵 → 恢复当前词计时，无缝继续（不刷新、不丢预加载队列）
 function resumeAfterTest() {
-  currentGroupViewed = [];         // 关键：清空候选池，已测词不再重复出现
   appMode = MODE_RECITE;
   gTestCards = []; gTestIndex = 0; gTestLocked = false;
   hide('reciteTest');
@@ -1286,10 +1321,8 @@ function nextGroupTestCard() {
   renderGroupTestCard();
 }
 
-// 手动触发「测验本份」
+// 手动触发「测验本份」：测本份全部词（未加载先补拉）；准备期间由 startGroupTest 内部禁用按钮防重入
 $('reciteTestNowBtn').addEventListener('click', () => {
-  if (appMode === MODE_TEST) return;
-  if (!currentGroupViewed.length) { toast('本份暂无可测验的词', false); return; }
   startGroupTest();
 });
 
