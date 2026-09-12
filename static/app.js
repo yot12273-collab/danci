@@ -1059,6 +1059,7 @@ function renderReciteCard() {
   const d = reciteWords[reciteIndex];
   $('reciteProgress').textContent = `第 ${reciteChunkIndex} 份 · 本份 ${reciteIndex + 1} / ${reciteChunkTotal}`;
   $('reciteBody').innerHTML = buildWordDetailHtml(d, { readonly: true });
+  $('reciteBody').scrollTop = 0;   // 卡片局部滚动：切词时回顶，避免残留上一词的滚动位置
   syncAdvanceButton();      // 依据当前下标同步推进按钮文字（下一个 ↔ 进入下一份）
   resetCountdown();         // 复位倒计时数字显示
   // 尾词（本份最后一个词，按总词数判定，与已加载进度无关）：立即清除定时器、停止自动跳转，

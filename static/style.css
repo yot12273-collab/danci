@@ -558,8 +558,8 @@ button { font-family: inherit; }
 .switch-row input:checked + .switch-track .switch-thumb { transform: translateX(20px); }
 .switch-text { font-size: 14px; color: #334155; }
 
-/* 背诵面板：纵向 flex 布局，锁定 100dvh 高度、整体禁滚动。
-   制定态 / 列表态各自内部滚动；运行态彻底一屏禁滚动（核心诉求）。 */
+/* 背诵面板：纵向 flex 布局，锁定 100dvh 高度、整体禁滚动（外层不产生页面级滚动条）。
+   制定态 / 列表态各自内部滚动；运行态整屏锁高度，单词卡片（.recite-body）局部可滚动。 */
 #recitePanel {
   display: flex;
   flex-direction: column;
@@ -601,16 +601,23 @@ button { font-family: inherit; }
   box-shadow: 0 4px 16px rgba(15, 23, 42, .10);
   pointer-events: none;
 }
-/* 单词主体卡片：占据中间弹性区，内部纵向 flex；内容超一屏时内部截断，绝不撑出页面滚动条 */
+/* 单词主体卡片：占据中间弹性区，内部纵向 flex；内容超一屏时局部滚动（不再截断），
+   绝不撑出页面级滚动条（外层 #recitePanel 仍锁 100dvh 禁滚动）。 */
 .recite-body {
-  flex: 1; min-height: 0; overflow: hidden;
+  flex: 1; min-height: 0;
+  overflow-y: auto;            /* 核心：长内容局部可滚动 */
+  overflow-x: hidden;          /* 防超长单词横向撑爆，仅纵向滚动 */
   display: flex; flex-direction: column;
   background: var(--card); border-radius: 20px;
   padding: 18px 16px;
   box-shadow: 0 6px 24px rgba(0,0,0,.08);
   text-align: left;
+  -webkit-overflow-scrolling: touch;   /* iOS 惯性滚动，手指滑动顺畅 */
+  scrollbar-width: none;               /* Firefox 隐藏滚动条 */
 }
-/* 背诵卡片内自适应排版：单词按视口宽度自动缩放，超长内容省略号截断 */
+/* 隐藏 Webkit 滚动条：内容区保持视觉整洁，滚动能力不受影响 */
+.recite-body::-webkit-scrollbar { display: none; }
+/* 背诵卡片内自适应排版：单词按视口宽度自动缩放 */
 .recite-body .drawer-title { display: block; flex-shrink: 0; }
 .recite-body .dw-word {
   font-size: clamp(1.5rem, 8vw, 3rem);
@@ -620,23 +627,13 @@ button { font-family: inherit; }
 }
 .recite-body .dw-phonetic { font-size: clamp(.85rem, 3.5vw, 1.05rem); }
 .recite-body .dw-pos { text-align: center; }
-.recite-body .dw-highlight {
-  flex-shrink: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;               /* 提示语最多 2 行 */
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
+/* 提示语：完整展示，超长时随卡片局部滚动（不再截断） */
+.recite-body .dw-highlight { flex-shrink: 0; }
 .recite-body .dw-section { flex-shrink: 0; margin-top: 14px; }
 .recite-body .dw-section h3 { margin-bottom: 6px; }
-/* 中文释义：超长释义最多 3 行，超出以省略号截断，绝不撑爆一屏 */
+/* 中文释义：完整展示，超长时随卡片局部滚动（不再截断）；长串英文强制断行防横向溢出 */
 .recite-body .trans-item { padding: 6px 0; }
-.recite-body .trans-meaning {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
+.recite-body .trans-meaning { overflow-wrap: break-word; }
 /* 形近词 / 外部搜索：收窄间距，减少竖向占用 */
 .recite-body .chip-row { gap: 6px; }
 .recite-body .ext-row { gap: 6px; }

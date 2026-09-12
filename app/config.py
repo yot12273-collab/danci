@@ -16,7 +16,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 class Settings:
     app_name = "英语词汇学习助手"
-    version = "1.3.0"
+    version = "1.3.1"
 
     # 主业务数据库连接串：本地开发不设置（用下方 SQLite 文件）；
     # 部署到 Render 时设置 DATABASE_URL 指向托管 Postgres（Supabase / Neon 等），
